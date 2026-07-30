@@ -89,9 +89,21 @@ ANTIGRAVITY_MODEL='<model>' ANTIGRAVITY_EFFORT='<level>' review-commits --engine
 
 Valid effort levels are engine-specific (e.g. Claude accepts `low`, `medium`,
 `high`, `xhigh`, `max`; Antigravity accepts `low`, `medium`, `high`); the
-underlying CLI rejects invalid values. The resolved model and effort (or
-`default` when unset) are recorded at the end of every per-commit review file,
-in `SUMMARY.md`, and in the run's `README.md` index.
+underlying CLI rejects invalid values. The model and effort actually used are
+recorded at the end of every per-commit review file, in `SUMMARY.md`, and in
+the run's `README.md` index — including when neither was overridden:
+
+- Codex: both the real model and reasoning effort are parsed from its own
+  startup banner (which reports them regardless of whether `--model`/
+  `CODEX_EFFORT` were set), so nothing is ever reported as merely "default".
+- Claude: the real model is recovered from `--output-format json`'s
+  `modelUsage` (requires `jq`); when a run made more than one model call,
+  the one with the most output tokens is reported, as a best-effort guess at
+  which one produced the review. Effort is not exposed anywhere in Claude's
+  output, so it still falls back to `CLAUDE_EFFORT` or `default` when
+  `--effort` wasn't passed.
+- Antigravity: neither is currently introspectable from its output, so both
+  still fall back to `ANTIGRAVITY_MODEL`/`ANTIGRAVITY_EFFORT` or `default`.
 
 By default the script strips `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
 `GOOGLE_API_KEY`, and `GEMINI_API_KEY` from each engine's environment, so a
