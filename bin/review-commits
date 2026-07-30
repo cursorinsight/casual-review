@@ -1,0 +1,278 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  review-commits [options]
+
+Options:
+  --engine NAME       codex, claude, antigravity, or all (default: codex)
+  --base REF          base ref (default: origin/master)
+  --head REF          head ref (default: HEAD)
+  --output DIR        output directory (default: ai-reviews)
+  --prompt FILE       commit prompt template
+  --limit N           review only the first N commits
+  --model NAME        model override (requires a single --engine, not "all")
+  --effort LEVEL      reasoning-effort override (requires a single --engine,
+                      not "all"); valid levels are engine-specific
+  --use-credits       allow metered API-credit billing instead of the
+                      engine's default plan/subscription auth (default: off;
+                      verified to control this for claude, best-effort for
+                      codex/antigravity -- see README)
+  --skip-summary      do not create an aggregate summary
+  -h, --help          show help
+
+Environment overrides:
+  CODEX_BIN, CLAUDE_BIN, ANTIGRAVITY_BIN
+  CODEX_MODEL, CLAUDE_MODEL, ANTIGRAVITY_MODEL
+  CODEX_EFFORT, CLAUDE_EFFORT, ANTIGRAVITY_EFFORT
+  CODEX_EXTRA_ARGS, CLAUDE_EXTRA_ARGS, ANTIGRAVITY_EXTRA_ARGS
+  SUMMARY_ENGINE      engine used for summary (default: selected engine; codex for all)
+
+Examples:
+  review-commits --engine claude --base origin/master --head HEAD
+  review-commits --engine claude --model claude-sonnet-5 --effort high
+  review-commits --engine all --limit 3
+  CLAUDE_MODEL=claude-sonnet-5 CLAUDE_EFFORT=high review-commits --engine all
+  ANTIGRAVITY_EXTRA_ARGS='--some-future-flag' review-commits --engine antigravity
+USAGE
+}
+
+die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "command not found: $1"; }
+
+engine_model() {
+  case "$1" in
+    codex) printf '%s' "${CODEX_MODEL:-default}" ;;
+    claude) printf '%s' "${CLAUDE_MODEL:-default}" ;;
+    antigravity) printf '%s' "${ANTIGRAVITY_MODEL:-default}" ;;
+  esac
+}
+
+engine_effort() {
+  case "$1" in
+    codex) printf '%s' "${CODEX_EFFORT:-default}" ;;
+    claude) printf '%s' "${CLAUDE_EFFORT:-default}" ;;
+    antigravity) printf '%s' "${ANTIGRAVITY_EFFORT:-default}" ;;
+  esac
+}
+
+resolve_self() {
+  local src=$0
+  while [ -h "$src" ]; do
+    local dir
+    dir="$(CDPATH= cd -- "$(dirname -- "$src")" && pwd)"
+    src="$(readlink -- "$src")"
+    case "$src" in
+      /*) ;;
+      *) src="$dir/$src" ;;
+    esac
+  done
+  CDPATH= cd -- "$(dirname -- "$src")" && pwd
+}
+
+SELF_DIR="$(resolve_self)"
+PACKAGE_DIR="$(CDPATH= cd -- "$SELF_DIR/.." && pwd)"
+ENGINE=codex
+BASE_REF=origin/master
+HEAD_REF=HEAD
+OUTPUT_DIR=ai-reviews
+PROMPT_FILE="$PACKAGE_DIR/prompts/commit-review.md"
+SUMMARY_PROMPT="$PACKAGE_DIR/prompts/summary.md"
+LIMIT=0
+DO_SUMMARY=1
+MODEL_OPT=""
+EFFORT_OPT=""
+USE_CREDITS=0
+
+while (($#)); do
+  case "$1" in
+    --engine) ENGINE=${2:?}; shift 2 ;;
+    --base) BASE_REF=${2:?}; shift 2 ;;
+    --head) HEAD_REF=${2:?}; shift 2 ;;
+    --output) OUTPUT_DIR=${2:?}; shift 2 ;;
+    --prompt) PROMPT_FILE=${2:?}; shift 2 ;;
+    --limit) LIMIT=${2:?}; shift 2 ;;
+    --model) MODEL_OPT=${2:?}; shift 2 ;;
+    --effort) EFFORT_OPT=${2:?}; shift 2 ;;
+    --use-credits) USE_CREDITS=1; shift ;;
+    --skip-summary) DO_SUMMARY=0; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown option: $1" ;;
+  esac
+done
+
+case "$ENGINE" in codex|claude|antigravity|all) ;; *) die "invalid engine: $ENGINE" ;; esac
+[[ "$LIMIT" =~ ^[0-9]+$ ]] || die "--limit must be a non-negative integer"
+
+if [[ -n "$MODEL_OPT" || -n "$EFFORT_OPT" ]]; then
+  [[ "$ENGINE" != all ]] || die "--model/--effort require a single --engine (not 'all'); use CODEX_MODEL/CLAUDE_MODEL/ANTIGRAVITY_MODEL and CODEX_EFFORT/CLAUDE_EFFORT/ANTIGRAVITY_EFFORT instead"
+  case "$ENGINE" in
+    codex)
+      [[ -z "$MODEL_OPT" ]] || CODEX_MODEL=$MODEL_OPT
+      [[ -z "$EFFORT_OPT" ]] || CODEX_EFFORT=$EFFORT_OPT
+      ;;
+    claude)
+      [[ -z "$MODEL_OPT" ]] || CLAUDE_MODEL=$MODEL_OPT
+      [[ -z "$EFFORT_OPT" ]] || CLAUDE_EFFORT=$EFFORT_OPT
+      ;;
+    antigravity)
+      [[ -z "$MODEL_OPT" ]] || ANTIGRAVITY_MODEL=$MODEL_OPT
+      [[ -z "$EFFORT_OPT" ]] || ANTIGRAVITY_EFFORT=$EFFORT_OPT
+      ;;
+  esac
+fi
+
+# Default: strip known API-key env vars so engines fall back to their
+# plan/subscription auth instead of silently billing via metered API
+# credits. --use-credits leaves them in place.
+if ((USE_CREDITS == 0)); then
+  unset ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY GEMINI_API_KEY
+fi
+
+need git
+[[ -r "$PROMPT_FILE" ]] || die "prompt not readable: $PROMPT_FILE"
+[[ -r "$SUMMARY_PROMPT" ]] || die "summary prompt not readable: $SUMMARY_PROMPT"
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "run inside a Git repository"
+git rev-parse --verify "${BASE_REF}^{commit}" >/dev/null 2>&1 || die "invalid base: $BASE_REF"
+git rev-parse --verify "${HEAD_REF}^{commit}" >/dev/null 2>&1 || die "invalid head: $HEAD_REF"
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd)
+
+COMMITS=()
+while IFS= read -r line; do
+  COMMITS+=("$line")
+done < <(git rev-list --reverse --topo-order "${BASE_REF}..${HEAD_REF}")
+if ((LIMIT > 0 && ${#COMMITS[@]} > LIMIT)); then COMMITS=("${COMMITS[@]:0:LIMIT}"); fi
+((${#COMMITS[@]})) || { echo "No commits in $BASE_REF..$HEAD_REF"; exit 0; }
+
+if git rev-list --min-parents=2 "${BASE_REF}..${HEAD_REF}" | grep -q .; then
+  printf 'Warning: range contains merge commits; each merge is reviewed against its first parent.\n' >&2
+fi
+
+run_codex() {
+  local prompt=$1 output=$2
+  local bin=${CODEX_BIN:-codex}; need "$bin"
+  local -a extra=() model=() effort=()
+  [[ -z "${CODEX_EXTRA_ARGS:-}" ]] || read -r -a extra <<<"${CODEX_EXTRA_ARGS:-}"
+  [[ -z "${CODEX_MODEL:-}" ]] || model=(--model "$CODEX_MODEL")
+  [[ -z "${CODEX_EFFORT:-}" ]] || effort=(-c "model_reasoning_effort=\"$CODEX_EFFORT\"")
+  "$bin" exec --ephemeral --sandbox read-only -C "$REPO_ROOT" "${model[@]}" "${effort[@]}" "${extra[@]}" -o "$output" - <"$prompt" >/dev/null
+}
+
+run_claude() {
+  local prompt=$1 output=$2
+  local bin=${CLAUDE_BIN:-claude}; need "$bin"
+  local -a extra=() model=() effort=()
+  [[ -z "${CLAUDE_EXTRA_ARGS:-}" ]] || read -r -a extra <<<"${CLAUDE_EXTRA_ARGS:-}"
+  [[ -z "${CLAUDE_MODEL:-}" ]] || model=(--model "$CLAUDE_MODEL")
+  [[ -z "${CLAUDE_EFFORT:-}" ]] || effort=(--effort "$CLAUDE_EFFORT")
+  (
+    cd "$REPO_ROOT"
+    "$bin" -p --no-session-persistence --permission-mode dontAsk \
+      --tools 'Read,Bash' \
+      --allowedTools 'Read' \
+      'Bash(git diff *)' 'Bash(git show *)' 'Bash(git log *)' \
+      'Bash(git rev-parse *)' 'Bash(git cat-file *)' \
+      "${model[@]}" "${effort[@]}" "${extra[@]}" <"$prompt" >"$output"
+  )
+}
+
+run_antigravity() {
+  local prompt=$1 output=$2
+  local bin=${ANTIGRAVITY_BIN:-antigravity}; need "$bin"
+  local -a extra=() model=() effort=()
+  [[ -z "${ANTIGRAVITY_EXTRA_ARGS:-}" ]] || read -r -a extra <<<"${ANTIGRAVITY_EXTRA_ARGS:-}"
+  [[ -z "${ANTIGRAVITY_MODEL:-}" ]] || model=(--model "$ANTIGRAVITY_MODEL")
+  [[ -z "${ANTIGRAVITY_EFFORT:-}" ]] || effort=(--effort "$ANTIGRAVITY_EFFORT")
+  (
+    cd "$REPO_ROOT"
+    "$bin" -p "$(cat "$prompt")" "${model[@]}" "${effort[@]}" "${extra[@]}" >"$output"
+  )
+}
+
+run_engine() {
+  local engine=$1 prompt=$2 output=$3
+  case "$engine" in
+    codex) run_codex "$prompt" "$output" ;;
+    claude) run_claude "$prompt" "$output" ;;
+    antigravity) run_antigravity "$prompt" "$output" ;;
+  esac
+}
+
+engines=()
+if [[ "$ENGINE" == all ]]; then engines=(codex claude antigravity); else engines=("$ENGINE"); fi
+
+engine_config_lines=""
+for e in "${engines[@]}"; do
+  engine_config_lines+="- ${e} model: $(engine_model "$e") · effort: $(engine_effort "$e")
+"
+done
+
+INDEX="$OUTPUT_DIR/README.md"
+FAILURES="$OUTPUT_DIR/failures.tsv"
+: >"$FAILURES"
+cat >"$INDEX" <<EOF2
+# AI-assisted Gerrit commit reviews
+
+- Base: \`$BASE_REF\`
+- Head: \`$HEAD_REF\`
+- Engines: ${engines[*]}
+- Commits: ${#COMMITS[@]}
+${engine_config_lines}
+| # | Commit | Subject | Engine | Result |
+|---:|---|---|---|---|
+EOF2
+
+n=0
+for commit in "${COMMITS[@]}"; do
+  n=$((n+1))
+  parent=$(git rev-parse "${commit}^1")
+  short=$(git rev-parse --short=12 "$commit")
+  subject=$(git log -1 --format=%s "$commit")
+  safe_subject=$(printf '%s' "$subject" | sed 's/[&/]/\\&/g')
+  for engine in "${engines[@]}"; do
+    dir="$OUTPUT_DIR/$engine"; mkdir -p "$dir"
+    output="$dir/$(printf '%03d' "$n")-$short.md"
+    tmp=$(mktemp)
+    trap 'rm -f "$tmp"' EXIT
+    sed -e "s/{{COMMIT}}/$commit/g" -e "s/{{PARENT}}/$parent/g" \
+        -e "s/{{SUBJECT}}/$safe_subject/g" "$PROMPT_FILE" >"$tmp"
+    printf '[%d/%d] %-11s %s %s\n' "$n" "${#COMMITS[@]}" "$engine" "$short" "$subject"
+    if run_engine "$engine" "$tmp" "$output"; then result=OK; else
+      result=FAILED
+      printf '%s\t%s\t%s\t%s\n' "$engine" "$commit" "$short" "$subject" >>"$FAILURES"
+      printf '# Review failed\n\nEngine: %s  \nCommit: `%s`\n' "$engine" "$commit" >"$output"
+    fi
+    printf '\n---\n_Engine: %s · Model: %s · Effort: %s_\n' \
+      "$engine" "$(engine_model "$engine")" "$(engine_effort "$engine")" >>"$output"
+    escaped=${subject//|/\\|}
+    rel="$engine/$(basename "$output")"
+    printf '| %d | `%s` | %s | %s | [%s](%s) |\n' "$n" "$short" "$escaped" "$engine" "$result" "$rel" >>"$INDEX"
+    rm -f "$tmp"; trap - EXIT
+  done
+done
+
+make_summary() {
+  local engine=${SUMMARY_ENGINE:-}
+  if [[ -z "$engine" ]]; then
+    [[ "$ENGINE" == all ]] && engine=codex || engine=$ENGINE
+  fi
+  local tmp=$(mktemp)
+  sed "s|{{REVIEW_DIR}}|$OUTPUT_DIR|g" "$SUMMARY_PROMPT" >"$tmp"
+  if run_engine "$engine" "$tmp" "$OUTPUT_DIR/SUMMARY.md"; then
+    printf '\n---\n_Engine: %s · Model: %s · Effort: %s_\n' \
+      "$engine" "$(engine_model "$engine")" "$(engine_effort "$engine")" >>"$OUTPUT_DIR/SUMMARY.md"
+    printf '\nSummary: %s (generated with %s)\n' "$OUTPUT_DIR/SUMMARY.md" "$engine"
+  else
+    printf 'Warning: summary generation failed with %s\n' "$engine" >&2
+  fi
+  rm -f "$tmp"
+}
+
+((DO_SUMMARY == 0)) || make_summary
+printf 'Index: %s\n' "$INDEX"
+[[ ! -s "$FAILURES" ]] || { printf 'Some reviews failed; see %s\n' "$FAILURES" >&2; exit 1; }
