@@ -2,6 +2,7 @@
 # (https://github.com/cursorinsight/casual-capsule), via its
 # CAPSULE_CUSTOM_COMPOSE extension point. See compose.yml and the
 # "Running inside Capsule" section of README.md.
+# hadolint ignore=DL3007
 FROM casual-capsule-cli:latest
 
 COPY bin /opt/multi-cli-gerrit-review/bin

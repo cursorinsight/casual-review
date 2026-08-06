@@ -256,6 +256,26 @@ alias review='CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
       review-commits --engine codex'
 ```
 
+## Testing
+
+Run local sanity tests with:
+
+```bash
+./tests/test_all.sh
+```
+
+Run local linters with:
+
+```bash
+./tests/check_all.sh
+```
+
+`test_all.sh` checks command help paths and runs the uploader self-test.
+`check_all.sh` runs `shellcheck` over shell scripts plus `hadolint` over
+`Dockerfile`. When a linter is not installed locally, `check_all.sh` falls
+back to Docker. CI runs hadolint and shellcheck as separate checker steps and
+calls only `test_all.sh` from the test job.
+
 ## Notes
 
 - Merge commits are compared with their first parent and trigger a warning.
