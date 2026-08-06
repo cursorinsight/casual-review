@@ -125,6 +125,14 @@ no labels are voted. By default the uploader refuses to post a review when the
 reviewed commit is not Gerrit's current revision for the change; set
 `GERRIT_ALLOW_NON_CURRENT=1` to override.
 
+## Processing Review Feedback
+
+`prompts/process-reviews.md` is a single-shot agent prompt for processing
+generated review directories such as `ai-reviews/` or `reviews/`. Feed it to an
+agent from the repository under review when you want to triage findings, apply
+accepted fixes, append decisions to `DECISIONS.md`, squash clean fix commits
+into their target commits, and audit the final branch delta.
+
 ## Authentication
 
 Log in to each CLI normally before running the batch. The script reuses the
