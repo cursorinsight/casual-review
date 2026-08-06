@@ -6,5 +6,7 @@ FROM casual-capsule-cli:latest
 
 COPY bin /opt/multi-cli-gerrit-review/bin
 COPY prompts /opt/multi-cli-gerrit-review/prompts
-RUN ln -sf /opt/multi-cli-gerrit-review/bin/review-commits \
-      /usr/local/bin/review-commits
+RUN for script in review-commits upload-gerrit-reviews; do \
+      ln -sf "/opt/multi-cli-gerrit-review/bin/${script}" \
+        "/usr/local/bin/${script}"; \
+    done
