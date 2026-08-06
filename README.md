@@ -161,6 +161,18 @@ cd /path/to/casual-capsule
 `casual-capsule-cli` base image and symlinks `review-commits` onto `PATH`.
 Rerun it after changing `bin/review-commits` or the prompt templates.
 
+To run `casual-review` inside a capsule directly from the CLI, the following
+alias can come handy (applying Codex as the AI engine and `xhigh` reasoning
+effort, for example):
+
+```bash
+alias review='CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
+      capsule env \
+      CODEX_EFFORT=xhigh \
+      CODEX_EXTRA_ARGS="--dangerously-bypass-approvals-and-sandbox" \
+      review-commits --engine codex'
+```
+
 ## Notes
 
 - Merge commits are compared with their first parent and trigger a warning.
