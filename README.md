@@ -125,6 +125,25 @@ no labels are voted. By default the uploader refuses to post a review when the
 reviewed commit is not Gerrit's current revision for the change; set
 `GERRIT_ALLOW_NON_CURRENT=1` to override.
 
+`respond-gerrit-reviews` reads the generated review files and a
+`DECISIONS.md` file in the format used by `prompts/process-reviews.md`, finds
+the already uploaded AI inline comments on Gerrit, and posts replies that
+record the chosen decision, fix commit, squash target, checks, and reasoning.
+It maps decisions to uploaded inline comments by review-file order. Decisions
+for questions or other non-inline notes are posted as tagged Gerrit change
+messages with a stable decision key when that review file had inline comments.
+Decisions for commits with no uploaded review comments are ignored. Existing
+response messages with the same decision key are skipped on reruns. For `Fix`
+and `Skip` decisions, inline replies mark the Gerrit thread resolved:
+
+```bash
+respond-gerrit-reviews --dry-run ./ai-reviews ./ai-reviews/DECISIONS.md
+respond-gerrit-reviews --interactive ./ai-reviews ./ai-reviews/DECISIONS.md
+respond-gerrit-reviews --yolo ./ai-reviews ./ai-reviews/DECISIONS.md
+```
+
+As with uploads, set `GERRIT_ALLOW_NON_CURRENT=1` to reply on old patch sets.
+
 ## Processing Review Feedback
 
 `prompts/process-reviews.md` is a single-shot agent prompt for processing
@@ -247,10 +266,24 @@ cd /path/to/casual-capsule
   upload-gerrit-reviews --interactive ./ai-reviews
 ```
 
+Respond to uploaded Gerrit review comments from a processed decision log:
+
+```bash
+export CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml
+export GERRIT_HTTP_PASSWORD='<http-password-or-token>'
+cd /path/to/casual-capsule
+./capsule.sh --build-custom
+./capsule.sh env \
+  GERRIT_URL=https://gerrit.example.com \
+  GERRIT_USER='<gerrit-user>' \
+  GERRIT_HTTP_PASSWORD="$GERRIT_HTTP_PASSWORD" \
+  respond-gerrit-reviews --interactive ./ai-reviews ./ai-reviews/DECISIONS.md
+```
+
 `--build-custom` layers this project's `bin/` and `prompts/` on top of the
 `casual-capsule-cli` base image and symlinks `review-commits` and
-`upload-gerrit-reviews` onto `PATH`. Rerun it after changing scripts under
-`bin/` or the prompt templates.
+`upload-gerrit-reviews` and `respond-gerrit-reviews` onto `PATH`. Rerun it
+after changing scripts under `bin/` or the prompt templates.
 
 To run `casual-review` inside a capsule directly from the CLI, the following
 alias can come handy (applying Codex as the AI engine and `xhigh` reasoning

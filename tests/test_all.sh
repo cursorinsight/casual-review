@@ -46,12 +46,16 @@ run_cmd() {
 section "Sanity"
 require_executable bin/review-commits
 require_executable bin/upload-gerrit-reviews
+require_executable bin/respond-gerrit-reviews
 require_executable tests/check_all.sh
 require_executable tests/test_all.sh
 run_cmd "review-commits --help" bin/review-commits --help
 run_cmd "upload-gerrit-reviews --help" bin/upload-gerrit-reviews --help
 run_cmd "upload-gerrit-reviews --self-test" \
   bin/upload-gerrit-reviews --self-test
+run_cmd "respond-gerrit-reviews --help" bin/respond-gerrit-reviews --help
+run_cmd "respond-gerrit-reviews --self-test" \
+  bin/respond-gerrit-reviews --self-test
 
 if (( status == 0 )); then
   printf '\nAll tests passed.\n'

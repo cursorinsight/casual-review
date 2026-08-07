@@ -10,8 +10,10 @@ COPY prompts /opt/multi-cli-gerrit-review/prompts
 RUN chmod -R a+rX /opt/multi-cli-gerrit-review/bin \
       /opt/multi-cli-gerrit-review/prompts && \
     chmod 755 /opt/multi-cli-gerrit-review/bin/review-commits \
-      /opt/multi-cli-gerrit-review/bin/upload-gerrit-reviews && \
-    for script in review-commits upload-gerrit-reviews; do \
+      /opt/multi-cli-gerrit-review/bin/upload-gerrit-reviews \
+      /opt/multi-cli-gerrit-review/bin/respond-gerrit-reviews && \
+    for script in review-commits upload-gerrit-reviews \
+      respond-gerrit-reviews; do \
       ln -sf "/opt/multi-cli-gerrit-review/bin/${script}" \
         "/usr/local/bin/${script}"; \
     done
