@@ -129,6 +129,7 @@ DECISION_FIX_COMMITS=()
 DECISION_SQUASH_TARGETS=()
 DECISION_CHECKS=()
 DECISION_REASONINGS=()
+USED_COMMENT_KEYS=()
 
 REVIEW_COMMIT=
 REVIEW_ENGINE=
@@ -140,6 +141,7 @@ COMMENT_TITLES=()
 COMMENT_CONFIDENCES=()
 COMMENT_ACTIONS=()
 COMMENT_LOCATIONS=()
+QUESTION_TEXTS=()
 
 GERRIT_URL_EFFECTIVE=
 CURL_AUTH_CONFIG=
@@ -155,13 +157,38 @@ strip_code_ticks() {
   printf '%s' "$value"
 }
 
-normalize_full_commit_hash() {
+normalize_commit_ref() {
   local value=$1
 
   value=$(strip_code_ticks "$value")
   value=$(printf '%s' "$value" | tr 'A-F' 'a-f')
-  [[ "$value" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [[ "$value" =~ ^[0-9a-f]{7,40}$ ]] || return 1
   printf '%s' "$value"
+}
+
+commit_ref_matches_full() {
+  local full=$1
+  local ref=$2
+
+  [[ "${full:0:${#ref}}" == "$ref" ]]
+}
+
+format_commit_ref() {
+  local value=$1
+
+  value=$(strip_code_ticks "$value")
+  case "$value" in
+    ""|none)
+      printf 'none'
+      ;;
+    [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]*)
+      value=$(printf '%s' "$value" | tr 'A-F' 'a-f')
+      printf '%s%s%s' '`' "${value:0:7}" '`'
+      ;;
+    *)
+      printf '%s' "$value"
+      ;;
+  esac
 }
 
 append_value() {
@@ -393,22 +420,6 @@ significant_overlap() {
   ((seen <= 2 && hits == seen))
 }
 
-extract_decision_finding() {
-  local reasoning=$1
-  local finding
-
-  case "$reasoning" in
-    "Finding: "*". Original measure:"*)
-      finding=${reasoning#Finding: }
-      finding=${finding%%. Original measure:*}
-      printf '%s' "$finding"
-      ;;
-    *)
-      printf '%s' "$reasoning"
-      ;;
-  esac
-}
-
 reset_review() {
   REVIEW_COMMIT=
   REVIEW_ENGINE=
@@ -420,6 +431,7 @@ reset_review() {
   COMMENT_CONFIDENCES=()
   COMMENT_ACTIONS=()
   COMMENT_LOCATIONS=()
+  QUESTION_TEXTS=()
 }
 
 append_finding_comment_line() {
@@ -429,6 +441,32 @@ append_finding_comment_line() {
     FINDING_COMMENT=$line
   else
     FINDING_COMMENT+=$'\n'"$line"
+  fi
+}
+
+finish_question() {
+  local idx
+
+  [[ -n "$QUESTION_TEXT" ]] || return 0
+  idx=${#QUESTION_TEXTS[@]}
+  QUESTION_TEXTS[idx]=$QUESTION_TEXT
+  QUESTION_TEXT=
+}
+
+start_question() {
+  local text=$1
+
+  finish_question
+  QUESTION_TEXT=$text
+}
+
+append_question_line() {
+  local line=$1
+
+  if [[ -z "$QUESTION_TEXT" ]]; then
+    QUESTION_TEXT=$line
+  else
+    QUESTION_TEXT+=" $line"
   fi
 }
 
@@ -535,6 +573,7 @@ parse_review_file() {
   local file=$1
   local line
   local in_findings=0
+  local in_questions=0
   local commit_re heading_re location_re confidence_re action_re engine_re
   local location_text
 
@@ -551,6 +590,7 @@ parse_review_file() {
   FINDING_ACTION=
   FINDING_COMMENT=
   FINDING_LOCATION=
+  QUESTION_TEXT=
 
   commit_re="^(- )?Commit: \`([0-9A-Fa-f]{40})\`"
   heading_re='^### \[([^]]+)\] (.*)$'
@@ -571,16 +611,39 @@ parse_review_file() {
 
     case "$line" in
       "## Findings")
+        finish_question
         in_findings=1
+        in_questions=0
         continue
         ;;
-      "## Questions"|"## Positive observations"|"## Review verdict"|"---")
+      "## Questions")
         finish_comment
         in_findings=0
+        in_questions=1
+        COLLECT_COMMENT=0
+        continue
+        ;;
+      "## Positive observations"|"## Review verdict"|"---")
+        finish_comment
+        finish_question
+        in_findings=0
+        in_questions=0
         COLLECT_COMMENT=0
         continue
         ;;
     esac
+
+    if ((in_questions)); then
+      case "$line" in
+        "- "*)
+          start_question "${line#- }"
+          ;;
+        "  "*)
+          append_question_line "${line#  }"
+          ;;
+      esac
+      continue
+    fi
 
     if ((in_findings)); then
       if [[ $line =~ $heading_re ]]; then
@@ -617,6 +680,7 @@ parse_review_file() {
   done <"$file"
 
   finish_comment
+  finish_question
   [[ -n "$REVIEW_COMMIT" ]]
 }
 
@@ -629,7 +693,7 @@ format_original_comment() {
   confidence=${COMMENT_CONFIDENCES[$i]:-}
   action=${COMMENT_ACTIONS[$i]:-}
   location=${COMMENT_LOCATIONS[$i]:-}
-  short=${REVIEW_COMMIT:0:12}
+  short=${REVIEW_COMMIT:0:7}
 
   msg="**[AI/${REVIEW_ENGINE}] ${severity}:**"
   [[ -z "$title" ]] || msg+=" $title"
@@ -641,37 +705,113 @@ format_original_comment() {
   printf '%s' "$msg"
 }
 
-review_comment_matches_finding() {
-  local normalized_finding=$1
+review_comment_matches_title() {
+  local normalized_decision_title=$1
   local normalized_title=$2
   local normalized_body=$3
 
   [[ -n "$normalized_title" ]] || return 1
-  if [[ "$normalized_finding" == *"$normalized_title"* ||
-      "$normalized_title" == *"$normalized_finding"* ||
-      "$normalized_finding" == *"$normalized_body"* ]]; then
+  if [[ "$normalized_decision_title" == *"$normalized_title"* ||
+      "$normalized_title" == *"$normalized_decision_title"* ||
+      "$normalized_decision_title" == *"$normalized_body"* ]]; then
     return 0
   fi
-  significant_overlap "$normalized_finding" "$normalized_title"
+  significant_overlap "$normalized_decision_title" "$normalized_title" ||
+    significant_overlap "$normalized_decision_title" "$normalized_body"
+}
+
+comment_key() {
+  local review_file=$1
+  local comment_index=$2
+
+  printf '%s\t%s' "$review_file" "$comment_index"
+}
+
+comment_is_claimed() {
+  local key=$1
+  local used
+
+  for used in "${USED_COMMENT_KEYS[@]}"; do
+    [[ "$used" == "$key" ]] && return 0
+  done
+  return 1
+}
+
+claim_comment() {
+  local review_file=$1
+  local comment_index=$2
+  local key
+
+  key=$(comment_key "$review_file" "$comment_index")
+  comment_is_claimed "$key" || USED_COMMENT_KEYS+=("$key")
+}
+
+decision_matches_question() {
+  local decision_text=$1
+  local normalized_decision
+  local normalized_question
+  local question
+  local question_like=0
+
+  normalized_decision=$(tokenize_text "$decision_text")
+  case "$normalized_decision" in
+    reviewer\ asked*|question*|follow\ up\ question*)
+      question_like=1
+      ;;
+  esac
+  for question in "${QUESTION_TEXTS[@]}"; do
+    normalized_question=$(tokenize_text "$question")
+    [[ -n "$normalized_question" ]] || continue
+    if [[ "$normalized_decision" == *"$normalized_question"* ||
+        "$normalized_question" == *"$normalized_decision"* ]]; then
+      return 0
+    fi
+    ((question_like)) &&
+      significant_overlap "$normalized_decision" "$normalized_question" &&
+      return 0
+  done
+  return 1
+}
+
+next_unclaimed_comment_index() {
+  local review_file=$1
+  local key
+  local i=0
+
+  while ((i < ${#COMMENT_TITLES[@]})); do
+    key=$(comment_key "$review_file" "$i")
+    if ! comment_is_claimed "$key"; then
+      printf '%s' "$i"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
 }
 
 matching_review_comment_index() {
-  local decision_reasoning=$1
-  local finding
-  local normalized_finding
+  local decision_title=$1
+  local review_file=$2
+  local normalized_decision_title
   local normalized_title
   local normalized_body
+  local key
   local i=0
   local match=-1
   local matches=0
 
-  finding=$(extract_decision_finding "$decision_reasoning")
-  normalized_finding=$(normalize_text "$finding")
+  normalized_decision_title=$(normalize_text "$decision_title")
+  decision_matches_question "$decision_title" && return 1
   while ((i < ${#COMMENT_TITLES[@]})); do
+    key=$(comment_key "$review_file" "$i")
+    if comment_is_claimed "$key"; then
+      i=$((i + 1))
+      continue
+    fi
     normalized_title=$(normalize_text "${COMMENT_TITLES[$i]:-}")
     normalized_body=$(normalize_text "${COMMENT_MESSAGES[$i]:-}")
-    if review_comment_matches_finding \
-        "$normalized_finding" \
+    if review_comment_matches_title \
+        "$normalized_decision_title" \
         "$normalized_title" \
         "$normalized_body"; then
       match=$i
@@ -684,6 +824,7 @@ matching_review_comment_index() {
     printf '%s' "$match"
     return 0
   fi
+  next_unclaimed_comment_index "$review_file" && return 0
   return 1
 }
 
@@ -730,13 +871,15 @@ decision_resolves_thread() {
 build_response_message() {
   local i=$1
   local decision=${DECISION_VALUES[$i]}
-  local fix_commit=${DECISION_FIX_COMMITS[$i]:-none}
-  local squash_target=${DECISION_SQUASH_TARGETS[$i]:-none}
   local checks=${DECISION_CHECKS[$i]:-not run: no checks recorded}
   local reasoning=${DECISION_REASONINGS[$i]:-}
+  local fix_commit
   local resolved
+  local squash_target
   local message
 
+  fix_commit=$(format_commit_ref "${DECISION_FIX_COMMITS[$i]:-none}")
+  squash_target=$(format_commit_ref "${DECISION_SQUASH_TARGETS[$i]:-none}")
   resolved=$(decision_resolves_thread "$decision")
   message="**Decision:** $decision"
   message+=$'\n'"**Fix commit:** $fix_commit"
@@ -1214,7 +1357,8 @@ print_response_preview() {
   line=${COMMENT_LINES[$comment_index]:-}
   printf '\nDecision %s/%s\n' "$((i + 1))" "${#DECISION_TITLES[@]}"
   printf '  Review file: %s\n' "$review_file"
-  printf '  Commit: %s\n' "${DECISION_REVIEWED_COMMITS[$i]}"
+  printf '  Commit: %s\n' \
+    "$(format_commit_ref "${DECISION_REVIEWED_COMMITS[$i]}")"
   if [[ -n "$line" ]]; then
     printf '  Comment: %s:%s\n' "${COMMENT_PATHS[$comment_index]}" "$line"
   else
@@ -1230,7 +1374,7 @@ decision_marker() {
   local i=$1
 
   printf 'casual-review-decision:%s:%s' \
-    "${DECISION_REVIEWED_COMMITS[$i]}" \
+    "${DECISION_REVIEWED_COMMITS[$i]:0:7}" \
     "${DECISION_TITLES[$i]}"
 }
 
@@ -1244,7 +1388,8 @@ build_change_message() {
   message="**AI review decision without inline comment:**"
   message+=$'\n'"**Decision key:** $marker"
   message+=$'\n'"**Review file:** ${DECISION_REVIEW_FILES[$i]}"
-  message+=$'\n'"**Reviewed commit:** ${DECISION_REVIEWED_COMMITS[$i]}"
+  message+=$'\n'"**Reviewed commit:** "
+  message+="$(format_commit_ref "${DECISION_REVIEWED_COMMITS[$i]}")"
   message+=$'\n\n'"$response"
   printf '%s' "$message"
 }
@@ -1256,7 +1401,8 @@ print_change_message_preview() {
 
   printf '\nDecision %s/%s\n' "$((i + 1))" "${#DECISION_TITLES[@]}"
   printf '  Review file: %s\n' "$review_file"
-  printf '  Commit: %s\n' "${DECISION_REVIEWED_COMMITS[$i]}"
+  printf '  Commit: %s\n' \
+    "$(format_commit_ref "${DECISION_REVIEWED_COMMITS[$i]}")"
   printf '  Change message: yes\n'
   printf '  Decision: %s\n' "${DECISION_VALUES[$i]}"
   printf '  Message:\n'
@@ -1300,25 +1446,28 @@ process_decision() {
     return 0
   fi
   if ! decision_commit=$(
-      normalize_full_commit_hash "${DECISION_REVIEWED_COMMITS[$i]}"
+      normalize_commit_ref "${DECISION_REVIEWED_COMMITS[$i]}"
     ); then
-    warn "decision $((i + 1)): Reviewed commit is not a full commit hash"
+    warn "decision $((i + 1)): Reviewed commit is not a commit hash"
     SKIPPED_DECISIONS=$((SKIPPED_DECISIONS + 1))
     return 0
   fi
-  DECISION_REVIEWED_COMMITS[i]=$decision_commit
-  if [[ "$REVIEW_COMMIT" != "$decision_commit" ]]; then
+  if ! commit_ref_matches_full "$REVIEW_COMMIT" "$decision_commit"; then
     warn "decision $((i + 1)): review file commit does not match decision"
     SKIPPED_DECISIONS=$((SKIPPED_DECISIONS + 1))
     return 0
   fi
+  DECISION_REVIEWED_COMMITS[i]=$REVIEW_COMMIT
   if ((${#COMMENT_PATHS[@]} == 0)); then
     IGNORED_NO_COMMENTS=$((IGNORED_NO_COMMENTS + 1))
     return 0
   fi
   if comment_index=$(
-      matching_review_comment_index "${DECISION_REASONINGS[$i]}"
+      matching_review_comment_index \
+        "${DECISION_TITLES[$i]} ${DECISION_REASONINGS[$i]}" \
+        "$review_file"
     ); then
+    claim_comment "$review_file" "$comment_index"
     response=$(build_response_message "$i")
     print_response_preview "$i" "$review_file" "$comment_index" "$response"
   else
@@ -1485,7 +1634,7 @@ Suggested Gerrit comment:
 
 ## Questions
 
-None.
+- Follow-up question?
 EOF_REVIEW
   cat >"$empty_review_file" <<'EOF_EMPTY_REVIEW'
 # Commit review
@@ -1505,59 +1654,55 @@ None.
 None.
 EOF_EMPTY_REVIEW
   cat >"$decisions" <<EOF_DECISIONS
-## 2026-08-07T00:00:00Z - 0123456789ab - Validate input
+## 2026-08-07T00:00:00Z - 0123456 - Validate input
 
 - Review file: \`$review_file\`
-- Reviewed commit: \`0123456789abcdef0123456789abcdef01234567\`
+- Reviewed commit: \`0123456\`
 - Decision: Fix
 - Fix commit: \`abcdef1\`
-- Squash target: \`0123456789abcdef0123456789abcdef01234567\`
+- Squash target: \`0123456\`
 - Checks: \`shellcheck bin/tool\` passed
-- Reasoning: Finding: Validate input. Original measure: Fix. Added guard.
+- Reasoning: Added guard.
 
-## 2026-08-07T00:00:00Z - 0123456789ab - Follow-up question
+## 2026-08-07T00:00:00Z - 0123456 - Follow-up question
 
 - Review file: \`$review_file\`
-- Reviewed commit: \`0123456789abcdef0123456789abcdef01234567\`
+- Reviewed commit: \`0123456\`
 - Decision: Skip
 - Fix commit: none
 - Squash target: none
 - Checks: not run: no checks recorded
-- Reasoning: Finding: Reviewer asked a non-inline question. Original measure:
-  Skip. No uploaded inline comment exists.
+- Reasoning: No uploaded inline comment exists.
 
-## 2026-08-07T00:00:00Z - 0123456789ab - Update docs
+## 2026-08-07T00:00:00Z - 0123456 - Update docs
 
 - Review file: \`$review_file\`
-- Reviewed commit: \`0123456789abcdef0123456789abcdef01234567\`
+- Reviewed commit: \`0123456\`
 - Decision: Skip
 - Fix commit: none
 - Squash target: none
 - Checks: not run: no checks recorded
-- Reasoning: Finding: Update docs. Original measure: Skip. The README already
-  explains the command.
+- Reasoning: The README already explains the command.
 
 ## 2026-08-07T00:00:00Z - fedcba987654 - Empty review
 
 - Review file: \`$empty_review_file\`
-- Reviewed commit: \`fedcba9876543210fedcba9876543210fedcba98\`
+- Reviewed commit: \`fedcba9\`
 - Decision: Skip
 - Fix commit: none
 - Squash target: none
 - Checks: not run: no checks recorded
-- Reasoning: Finding: Review failed without reviewer comments. Original
-  measure: No action. Nothing should be uploaded.
+- Reasoning: Nothing should be uploaded.
 
 ## 2026-08-07T00:00:00Z - 222222222222 - Wrong commit
 
 - Review file: \`$review_file\`
-- Reviewed commit: \`2222222222222222222222222222222222222222\`
+- Reviewed commit: \`2222222\`
 - Decision: Skip
 - Fix commit: none
 - Squash target: none
 - Checks: not run: no checks recorded
-- Reasoning: Finding: Stale decision metadata. Original measure: Skip.
-  Mismatched review files must not be posted.
+- Reasoning: Mismatched review files must not be posted.
 EOF_DECISIONS
 
   parse_decisions_file "$decisions"
@@ -1567,15 +1712,21 @@ EOF_DECISIONS
     die "self-test: review parse failed"
   [[ ${#COMMENT_PATHS[@]} -eq 2 ]] ||
     die "self-test: interleaved review comment count failed"
-  comment_index=$(matching_review_comment_index "${DECISION_REASONINGS[0]}") ||
+  comment_index=$(
+    matching_review_comment_index "${DECISION_TITLES[0]}" "$review_file"
+  ) ||
     die "self-test: first comment matching failed"
   [[ "$comment_index" == 0 ]] ||
     die "self-test: wrong first comment index"
-  if matching_review_comment_index "${DECISION_REASONINGS[1]}" >/dev/null;
+  if matching_review_comment_index \
+      "${DECISION_TITLES[1]}" \
+      "$review_file" >/dev/null;
   then
     die "self-test: non-inline decision matched a comment"
   fi
-  comment_index=$(matching_review_comment_index "${DECISION_REASONINGS[2]}") ||
+  comment_index=$(
+    matching_review_comment_index "${DECISION_TITLES[2]}" "$review_file"
+  ) ||
     die "self-test: second comment matching failed"
   [[ "$comment_index" == 1 ]] ||
     die "self-test: wrong second comment index"
@@ -1585,7 +1736,9 @@ EOF_DECISIONS
     die "self-test: empty review comment count failed"
   parse_review_file "$review_file" ||
     die "self-test: review reparse failed"
-  comment_index=$(matching_review_comment_index "${DECISION_REASONINGS[0]}") ||
+  comment_index=$(
+    matching_review_comment_index "${DECISION_TITLES[0]}" "$review_file"
+  ) ||
     die "self-test: comment matching failed"
   [[ "$comment_index" == 0 ]] ||
     die "self-test: wrong comment index"
@@ -1628,6 +1781,8 @@ EOF_DECISIONS
     .comments["bin/tool"][0].in_reply_to == "abc123"
     and .comments["bin/tool"][0].unresolved == false
     and (.comments["bin/tool"][0].message | contains("**Decision:** Fix"))
+    and (.comments["bin/tool"][0].message | contains("`abcdef1`"))
+    and (.comments["bin/tool"][0].message | contains("`0123456`"))
     and (.comments["bin/tool"][0].message | contains("Added guard."))
   ' >/dev/null <<<"$payload" || die "self-test: response payload failed"
 
@@ -1635,7 +1790,9 @@ EOF_DECISIONS
   response=$(build_change_message 1 "$marker")
   payload=$(build_change_message_payload "$response")
   jq -e --arg marker "$marker" '
-    .message | contains($marker)
+    (.message | contains($marker))
+    and (.message | contains("**Reviewed commit:** `0123456`"))
+    and (.message | contains("No uploaded inline comment exists."))
   ' >/dev/null <<<"$payload" ||
     die "self-test: change message payload failed"
   change_message_exists \

@@ -135,6 +135,8 @@ messages with a stable decision key when that review file had inline comments.
 Decisions for commits with no uploaded review comments are ignored. Existing
 response messages with the same decision key are skipped on reruns. For `Fix`
 and `Skip` decisions, inline replies mark the Gerrit thread resolved:
+Decision matching uses the decision title; `Reasoning` is posted as-is and
+should contain only the final rationale.
 
 ```bash
 respond-gerrit-reviews --dry-run ./ai-reviews ./ai-reviews/DECISIONS.md
