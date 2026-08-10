@@ -145,6 +145,8 @@ respond-gerrit-reviews --yolo ./ai-reviews ./ai-reviews/DECISIONS.md
 ```
 
 As with uploads, set `GERRIT_ALLOW_NON_CURRENT=1` to reply on old patch sets.
+`--interactive` shows a terminal response UI with progress, boxes, and
+color-coded prompts. Set `NO_COLOR=1` to disable colors.
 
 ## Processing Review Feedback
 

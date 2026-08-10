@@ -137,6 +137,15 @@ EOF_DECISIONS
 parse_decisions_file "$decisions"
 [[ ${#DECISION_TITLES[@]} -eq 5 ]] ||
   die "respond test: decision count failed"
+total=$(LIMIT=0 limited_decision_total "${#DECISION_TITLES[@]}")
+[[ "$total" == 5 ]] ||
+  die "respond test: unlimited interactive total failed"
+total=$(LIMIT=3 limited_decision_total "${#DECISION_TITLES[@]}")
+[[ "$total" == 3 ]] ||
+  die "respond test: limited interactive total failed"
+total=$(LIMIT=8 limited_decision_total "${#DECISION_TITLES[@]}")
+[[ "$total" == 5 ]] ||
+  die "respond test: over-limit interactive total failed"
 parse_review_file "$review_file" ||
   die "respond test: review parse failed"
 [[ ${#COMMENT_PATHS[@]} -eq 2 ]] ||
