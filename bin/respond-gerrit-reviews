@@ -11,7 +11,6 @@ Options:
   --interactive    ask before each Gerrit reply
   --yolo           post every matched decision automatically
   --limit N        process only the first N decision entries
-  --self-test      run parser and JSON-builder checks, then exit
   -h, --help       show help
 
 Required environment for --interactive and --yolo:
@@ -60,7 +59,6 @@ trap cleanup EXIT
 
 MODE=dry-run
 LIMIT=0
-SELF_TEST=0
 REVIEW_DIR=
 DECISIONS_FILE=
 WARNINGS=0
@@ -76,6 +74,7 @@ DUPLICATE_CHANGE_MESSAGES=0
 IGNORED_NO_COMMENTS=0
 FAILED_RESPONSES=0
 
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 while (($#)); do
   case "$1" in
     --dry-run)
@@ -94,10 +93,6 @@ while (($#)); do
       [[ $# -ge 2 ]] || die "--limit needs a value"
       LIMIT=$2
       shift 2
-      ;;
-    --self-test)
-      SELF_TEST=1
-      shift
       ;;
     -h|--help)
       usage
@@ -120,6 +115,7 @@ while (($#)); do
 done
 
 [[ "$LIMIT" =~ ^[0-9]+$ ]] || die "--limit must be a non-negative integer"
+fi
 
 DECISION_TITLES=()
 DECISION_REVIEW_FILES=()
@@ -1580,252 +1576,8 @@ process_decision() {
   MATCHED_DECISIONS=$((MATCHED_DECISIONS + 1))
 }
 
-run_self_test() {
-  local tmp
-  local reviews
-  local review_file
-  local empty_review_file
-  local decisions
-  local comment_index
-  local expected
-  local comments_json
-  local response
-  local payload
-  local marker
-
-  tmp=$(mktemp -d)
-  reviews="$tmp/reviews"
-  mkdir -p "$reviews/codex"
-  review_file="$reviews/codex/001-0123456789ab.md"
-  empty_review_file="$reviews/codex/002-fedcba987654.md"
-  decisions="$tmp/DECISIONS.md"
-  cat >"$review_file" <<'EOF_REVIEW'
-# Commit review
-
-## Commit
-
-- Commit: `0123456789abcdef0123456789abcdef01234567`
-- Parent: `1111111111111111111111111111111111111111`
-- Subject: Add response script
-
-## Findings
-
-### [Major] Validate input
-
-- Confidence: High
-- Location: `bin/tool:42`
-- Introduced by this commit: Yes
-- Gerrit action: Must fix
-
-Suggested Gerrit comment:
-
-> Please reject empty input before sending the request.
-
-### [Minor] Update docs
-
-- Confidence: Medium
-- Location: `README.md`
-- Introduced by this commit: Yes
-- Gerrit action: Consider
-
-Suggested Gerrit comment:
-
-> Explain the new mode in the README.
-
-## Questions
-
-- Follow-up question?
-EOF_REVIEW
-  cat >"$empty_review_file" <<'EOF_EMPTY_REVIEW'
-# Commit review
-
-## Commit
-
-- Commit: `fedcba9876543210fedcba9876543210fedcba98`
-- Parent: `1111111111111111111111111111111111111111`
-- Subject: Empty review
-
-## Findings
-
-None.
-
-## Questions
-
-None.
-EOF_EMPTY_REVIEW
-  cat >"$decisions" <<EOF_DECISIONS
-## 2026-08-07T00:00:00Z - 0123456 - Validate input
-
-- Review file: \`$review_file\`
-- Reviewed commit: \`0123456\`
-- Decision: Fix
-- Fix commit: \`abcdef1\`
-- Squash target: \`0123456\`
-- Checks: \`shellcheck bin/tool\` passed
-- Reasoning: Added guard.
-
-## 2026-08-07T00:00:00Z - 0123456 - Follow-up question
-
-- Review file: \`$review_file\`
-- Reviewed commit: \`0123456\`
-- Decision: Skip
-- Fix commit: none
-- Squash target: none
-- Checks: not run: no checks recorded
-- Reasoning: No uploaded inline comment exists.
-
-## 2026-08-07T00:00:00Z - 0123456 - Update docs
-
-- Review file: \`$review_file\`
-- Reviewed commit: \`0123456\`
-- Decision: Skip
-- Fix commit: none
-- Squash target: none
-- Checks: not run: no checks recorded
-- Reasoning: The README already explains the command.
-
-## 2026-08-07T00:00:00Z - fedcba987654 - Empty review
-
-- Review file: \`$empty_review_file\`
-- Reviewed commit: \`fedcba9\`
-- Decision: Skip
-- Fix commit: none
-- Squash target: none
-- Checks: not run: no checks recorded
-- Reasoning: Nothing should be uploaded.
-
-## 2026-08-07T00:00:00Z - 222222222222 - Wrong commit
-
-- Review file: \`$review_file\`
-- Reviewed commit: \`2222222\`
-- Decision: Skip
-- Fix commit: none
-- Squash target: none
-- Checks: not run: no checks recorded
-- Reasoning: Mismatched review files must not be posted.
-EOF_DECISIONS
-
-  parse_decisions_file "$decisions"
-  [[ ${#DECISION_TITLES[@]} -eq 5 ]] ||
-    die "self-test: decision count failed"
-  parse_review_file "$review_file" ||
-    die "self-test: review parse failed"
-  [[ ${#COMMENT_PATHS[@]} -eq 2 ]] ||
-    die "self-test: interleaved review comment count failed"
-  comment_index=$(
-    matching_review_comment_index "${DECISION_TITLES[0]}" "$review_file"
-  ) ||
-    die "self-test: first comment matching failed"
-  [[ "$comment_index" == 0 ]] ||
-    die "self-test: wrong first comment index"
-  if matching_review_comment_index \
-      "${DECISION_TITLES[1]}" \
-      "$review_file" >/dev/null;
-  then
-    die "self-test: non-inline decision matched a comment"
-  fi
-  comment_index=$(
-    matching_review_comment_index "${DECISION_TITLES[2]}" "$review_file"
-  ) ||
-    die "self-test: second comment matching failed"
-  [[ "$comment_index" == 1 ]] ||
-    die "self-test: wrong second comment index"
-  parse_review_file "$empty_review_file" ||
-    die "self-test: empty review parse failed"
-  ((${#COMMENT_PATHS[@]} == 0)) ||
-    die "self-test: empty review comment count failed"
-  parse_review_file "$review_file" ||
-    die "self-test: review reparse failed"
-  comment_index=$(
-    matching_review_comment_index "${DECISION_TITLES[0]}" "$review_file"
-  ) ||
-    die "self-test: comment matching failed"
-  [[ "$comment_index" == 0 ]] ||
-    die "self-test: wrong comment index"
-
-  DRY_RUN_RESPONSES=0
-  DRY_RUN_CHANGE_MESSAGES=0
-  MATCHED_DECISIONS=0
-  CHANGE_MESSAGE_DECISIONS=0
-  process_decision 1 >/dev/null ||
-    die "self-test: non-inline decision processing failed"
-  process_decision 2 >/dev/null ||
-    die "self-test: interleaved inline decision processing failed"
-  [[ "$DRY_RUN_CHANGE_MESSAGES" == 1 ]] ||
-    die "self-test: non-inline decision not converted to change message"
-  [[ "$DRY_RUN_RESPONSES" == 1 ]] ||
-    die "self-test: interleaved inline decision not matched"
-
-  expected=$(format_original_comment "$comment_index")
-  comments_json=$(
-    jq -c -n \
-      --arg message "${expected//\*\*/}" \
-      '{"bin/tool": [{id: "abc123", line: 42, message: $message}]}'
-  )
-  find_remote_comment \
-    "$comments_json" \
-    "bin/tool" \
-    "42" \
-    "$expected" \
-    "Validate input" \
-    "Please reject empty input before sending the request." ||
-    die "self-test: remote comment matching failed"
-  [[ "$MATCH_COMMENT_ID" == abc123 ]] ||
-    die "self-test: remote comment id failed"
-
-  response=$(build_response_message 0)
-  payload=$(
-    build_response_payload "bin/tool" "42" "abc123" "$response" false
-  )
-  jq -e '
-    .comments["bin/tool"][0].in_reply_to == "abc123"
-    and .comments["bin/tool"][0].unresolved == false
-    and (.comments["bin/tool"][0].message | contains("**Decision:** Fix"))
-    and (.comments["bin/tool"][0].message | contains("`abcdef1`"))
-    and (.comments["bin/tool"][0].message | contains("`0123456`"))
-    and (.comments["bin/tool"][0].message | contains("Added guard."))
-  ' >/dev/null <<<"$payload" || die "self-test: response payload failed"
-
-  marker=$(decision_marker 1)
-  response=$(build_change_message 1 "$marker")
-  payload=$(build_change_message_payload "$response")
-  jq -e --arg marker "$marker" '
-    (.message | contains($marker))
-    and (.message | contains("**Reviewed commit:** `0123456`"))
-    and (.message | contains("No uploaded inline comment exists."))
-  ' >/dev/null <<<"$payload" ||
-    die "self-test: change message payload failed"
-  change_message_exists \
-    "$(jq -c -n --arg message "$response" '
-      [{tag: "autogenerated:casual-review-response", message: $message}]
-    ')" \
-    "$marker" ||
-    die "self-test: change message duplicate check failed"
-
-  IGNORED_NO_COMMENTS=0
-  process_decision 3 >/dev/null ||
-    die "self-test: empty review decision processing failed"
-  [[ "$IGNORED_NO_COMMENTS" == 1 ]] ||
-    die "self-test: empty review decision not ignored"
-
-  SKIPPED_DECISIONS=0
-  process_decision 4 >/dev/null 2>/dev/null ||
-    die "self-test: mismatched commit processing failed"
-  [[ "$SKIPPED_DECISIONS" == 1 ]] ||
-    die "self-test: mismatched commit not skipped"
-
-  rm -rf "$tmp"
-  printf 'self-test ok\n'
-}
-
 main() {
   local i=0
-
-  if ((SELF_TEST)); then
-    validate_common_env
-    run_self_test
-    return 0
-  fi
 
   [[ -n "$REVIEW_DIR" ]] || die "AI_REVIEWS_DIR is required"
   [[ -n "$DECISIONS_FILE" ]] || die "DECISIONS_MD is required"
@@ -1879,4 +1631,6 @@ main() {
   ((FAILED_RESPONSES == 0))
 }
 
-main
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main
+fi

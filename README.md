@@ -313,7 +313,8 @@ Run local linters with:
 ./tests/check_all.sh
 ```
 
-`test_all.sh` checks command help paths and runs the uploader self-test.
+`test_all.sh` checks command help paths and runs the Gerrit script tests under
+`tests/`.
 `check_all.sh` runs `shellcheck` over shell scripts plus `hadolint` over
 `Dockerfile`. When a linter is not installed locally, `check_all.sh` falls
 back to Docker. CI runs hadolint and shellcheck as separate checker steps and
