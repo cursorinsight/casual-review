@@ -210,8 +210,18 @@ find_remote_comment \
   die "respond test: remote comment id failed"
 
 response=$(build_response_message 0)
+comments_json=$(jq -c -n '{}')
+comments_json=$(
+  add_comment_to_comments_json \
+    "$comments_json" \
+    "bin/tool" \
+    "42" \
+    "abc123" \
+    "$response" \
+    false
+)
 payload=$(
-  build_response_payload "bin/tool" "42" "abc123" "$response" false
+  build_batch_payload "$comments_json" ""
 )
 jq -e '
   .comments["bin/tool"][0].in_reply_to == "abc123"
@@ -222,9 +232,21 @@ jq -e '
   and (.comments["bin/tool"][0].message | contains("Added guard."))
 ' >/dev/null <<<"$payload" || die "respond test: response payload failed"
 
+reset_pending_queues
+# shellcheck disable=SC2034
+DECISION_REVIEWED_COMMITS[0]=$REVIEW_COMMIT
+queue_inline_response 0 "$review_file" "$comment_index" "$response" false
+[[ "${#PENDING_COMMITS[@]}" == 1 ]] ||
+  die "respond test: pending commit count failed"
+[[ "${PENDING_TYPES[0]}" == comment ]] ||
+  die "respond test: pending inline type failed"
+[[ "${PENDING_PATHS[0]}" == "bin/tool" ]] ||
+  die "respond test: pending inline path failed"
+reset_pending_queues
+
 marker=$(decision_marker 1)
 response=$(build_change_message 1 "$marker")
-payload=$(build_change_message_payload "$response")
+payload=$(build_batch_payload "$(jq -c -n '{}')" "$response")
 jq -e --arg marker "$marker" '
   (.message | contains($marker))
   and (.message | contains("**Reviewed commit:** `0123456`"))
@@ -237,6 +259,119 @@ change_message_exists \
   ')" \
   "$marker" ||
   die "respond test: change message duplicate check failed"
+
+comments_json=$(jq -c -n '{}')
+comments_json=$(
+  add_comment_to_comments_json \
+    "$comments_json" \
+    "bin/tool" \
+    "42" \
+    "abc123" \
+    "$response" \
+    false
+)
+message=$(append_change_message "first" "second")
+payload=$(build_batch_payload "$comments_json" "$message")
+jq -e '
+  .omit_duplicate_comments == true
+  and .comments["bin/tool"][0].in_reply_to == "abc123"
+  and .comments["bin/tool"][0].line == 42
+  and .comments["bin/tool"][0].unresolved == false
+  and (.message | contains("first"))
+  and (.message | contains("---"))
+  and (.message | contains("second"))
+' >/dev/null <<<"$payload" || die "respond test: batch payload failed"
+
+parse_review_file "$review_file" ||
+  die "respond test: batch review reparse failed"
+reset_pending_queues
+# shellcheck disable=SC2034
+DECISION_REVIEWED_COMMITS[0]=$REVIEW_COMMIT
+# shellcheck disable=SC2034
+DECISION_REVIEWED_COMMITS[1]=$REVIEW_COMMIT
+# shellcheck disable=SC2034
+DECISION_REVIEWED_COMMITS[2]=$REVIEW_COMMIT
+queue_inline_response 0 "$review_file" 0 "$(build_response_message 0)" false
+marker=$(decision_marker 1)
+queue_change_message 1 "$review_file" "$marker" \
+  "$(build_change_message 1 "$marker")"
+queue_inline_response 2 "$review_file" 1 "$(build_response_message 2)" true
+
+POST_COUNT=0
+POST_PAYLOAD=
+REMOTE_MESSAGE_0=$(format_original_comment 0)
+REMOTE_MESSAGE_1=$(format_original_comment 1)
+gerrit_find_change() {
+  printf '123\t%s\n' "$REVIEW_COMMIT"
+}
+gerrit_list_messages() {
+  printf '[]\n'
+}
+gerrit_list_comments() {
+  jq -c -n \
+    --arg message0 "$REMOTE_MESSAGE_0" \
+    --arg message1 "$REMOTE_MESSAGE_1" '
+      {
+        "bin/tool": [
+          {id: "remote0", line: 42, message: $message0}
+        ],
+        "README.md": [
+          {id: "remote1", message: $message1}
+        ]
+      }
+    '
+}
+gerrit_post_response() {
+  POST_COUNT=$((POST_COUNT + 1))
+  POST_PAYLOAD=$3
+}
+POSTED_RESPONSES=0
+POSTED_CHANGE_MESSAGES=0
+MATCHED_DECISIONS=0
+CHANGE_MESSAGE_DECISIONS=0
+SKIPPED_DECISIONS=0
+post_pending_batches
+[[ "$POST_COUNT" == 1 ]] || die "respond test: batch post count failed"
+[[ "$POSTED_RESPONSES" == 2 ]] ||
+  die "respond test: batch posted response count failed"
+[[ "$POSTED_CHANGE_MESSAGES" == 1 ]] ||
+  die "respond test: batch posted message count failed"
+[[ "$MATCHED_DECISIONS" == 2 ]] ||
+  die "respond test: batch matched response count failed"
+[[ "$CHANGE_MESSAGE_DECISIONS" == 1 ]] ||
+  die "respond test: batch matched message count failed"
+jq -e --arg marker "$marker" '
+  (.comments["bin/tool"] | length) == 1
+  and (.comments["README.md"] | length) == 1
+  and .comments["bin/tool"][0].in_reply_to == "remote0"
+  and .comments["README.md"][0].in_reply_to == "remote1"
+  and (.message | contains($marker))
+' >/dev/null <<<"$POST_PAYLOAD" ||
+  die "respond test: batched Gerrit payload failed"
+
+reset_pending_queues
+POST_COUNT=0
+POST_PAYLOAD=
+POSTED_RESPONSES=0
+POSTED_CHANGE_MESSAGES=0
+MATCHED_DECISIONS=0
+CHANGE_MESSAGE_DECISIONS=0
+# shellcheck disable=SC2034
+MODE=yolo
+queue_inline_response 0 "$review_file" 0 "$(build_response_message 0)" false
+flush_pending_if_commit_changed "$REVIEW_COMMIT"
+[[ "$POST_COUNT" == 0 ]] ||
+  die "respond test: same-commit boundary flushed"
+flush_pending_if_commit_changed fedcba9876543210fedcba9876543210fedcba98
+[[ "$POST_COUNT" == 1 ]] ||
+  die "respond test: next-commit boundary did not flush"
+[[ "${#PENDING_TYPES[@]}" == 0 ]] ||
+  die "respond test: boundary flush did not clear pending types"
+[[ -z "$PENDING_CURRENT_COMMIT" ]] ||
+  die "respond test: boundary flush did not clear current commit"
+# shellcheck disable=SC2034
+MODE=dry-run
+reset_pending_queues
 
 IGNORED_NO_COMMENTS=0
 process_decision 3 >/dev/null ||
