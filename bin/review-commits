@@ -66,18 +66,18 @@ resolve_self() {
   local src=$0
   while [ -h "$src" ]; do
     local dir
-    dir="$(CDPATH= cd -- "$(dirname -- "$src")" && pwd)"
+    dir="$(CDPATH='' cd -- "$(dirname -- "$src")" && pwd)"
     src="$(readlink -- "$src")"
     case "$src" in
       /*) ;;
       *) src="$dir/$src" ;;
     esac
   done
-  CDPATH= cd -- "$(dirname -- "$src")" && pwd
+  CDPATH='' cd -- "$(dirname -- "$src")" && pwd
 }
 
 SELF_DIR="$(resolve_self)"
-PACKAGE_DIR="$(CDPATH= cd -- "$SELF_DIR/.." && pwd)"
+PACKAGE_DIR="$(CDPATH='' cd -- "$SELF_DIR/.." && pwd)"
 ENGINE=codex
 BASE_REF=origin/master
 HEAD_REF=HEAD
@@ -256,17 +256,24 @@ for commit in "${COMMITS[@]}"; do
     trap 'rm -f "$tmp"' EXIT
     sed -e "s/{{COMMIT}}/$commit/g" -e "s/{{PARENT}}/$parent/g" \
         -e "s/{{SUBJECT}}/$safe_subject/g" "$PROMPT_FILE" >"$tmp"
-    printf '[%d/%d] %-11s %s %s\n' "$n" "${#COMMITS[@]}" "$engine" "$short" "$subject"
+    printf '[%d/%d] %-11s %s %s\n' \
+      "$n" "${#COMMITS[@]}" "$engine" "$short" "$subject"
     if run_engine "$engine" "$tmp" "$output"; then result=OK; else
       result=FAILED
-      printf '%s\t%s\t%s\t%s\n' "$engine" "$commit" "$short" "$subject" >>"$FAILURES"
-      printf '# Review failed\n\nEngine: %s  \nCommit: `%s`\n' "$engine" "$commit" >"$output"
+      printf '%s\t%s\t%s\t%s\n' \
+        "$engine" "$commit" "$short" "$subject" >>"$FAILURES"
+      printf "# Review failed\n\nEngine: %s  \nCommit: \`%s\`\n" \
+        "$engine" "$commit" >"$output"
     fi
     printf '\n---\n_Engine: %s · Model: %s · Effort: %s_\n' \
-      "$engine" "$(engine_model "$engine")" "$(engine_effort "$engine")" >>"$output"
+      "$engine" \
+      "$(engine_model "$engine")" \
+      "$(engine_effort "$engine")" \
+      >>"$output"
     escaped=${subject//|/\\|}
     rel="$engine/$(basename "$output")"
-    printf '| %d | `%s` | %s | %s | [%s](%s) |\n' "$n" "$short" "$escaped" "$engine" "$result" "$rel" >>"$ROWS"
+    printf "| %d | \`%s\` | %s | %s | [%s](%s) |\n" \
+      "$n" "$short" "$escaped" "$engine" "$result" "$rel" >>"$ROWS"
     rm -f "$tmp"; trap - EXIT
   done
 done
@@ -300,11 +307,15 @@ make_summary() {
   if [[ -z "$engine" ]]; then
     [[ "$ENGINE" == all ]] && engine=codex || engine=$ENGINE
   fi
-  local tmp=$(mktemp)
+  local tmp
+  tmp=$(mktemp)
   sed "s|{{REVIEW_DIR}}|$OUTPUT_DIR|g" "$SUMMARY_PROMPT" >"$tmp"
   if run_engine "$engine" "$tmp" "$OUTPUT_DIR/SUMMARY.md"; then
     printf '\n---\n_Engine: %s · Model: %s · Effort: %s_\n' \
-      "$engine" "$(engine_model "$engine")" "$(engine_effort "$engine")" >>"$OUTPUT_DIR/SUMMARY.md"
+      "$engine" \
+      "$(engine_model "$engine")" \
+      "$(engine_effort "$engine")" \
+      >>"$OUTPUT_DIR/SUMMARY.md"
     printf '\nSummary: %s (generated with %s)\n' "$OUTPUT_DIR/SUMMARY.md" "$engine"
   else
     printf 'Warning: summary generation failed with %s\n' "$engine" >&2
