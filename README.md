@@ -58,7 +58,30 @@ ai-reviews/
     └── ...
 ```
 
+## Processing Review Feedback
+
+`prompts/process-reviews.md` is a single-shot agent prompt for processing
+generated review directories such as `ai-reviews/` or `reviews/`. Feed it to an
+agent from the repository under review when you want to triage findings, apply
+accepted fixes, append decisions to `DECISIONS.md`, squash clean fix commits
+into their target commits, and audit the final branch delta.
+
+`process-reviews` launches one selected agent with that prompt and an explicit
+review directory:
+
+```bash
+process-reviews --engine codex
+process-reviews --engine claude --reviews ./reviews
+process-reviews --engine antigravity ./ai-reviews
+```
+
+The default review directory is `ai-reviews`. `--model`, `--effort`, and the
+same `*_BIN`, `*_MODEL`, `*_EFFORT`, and `*_EXTRA_ARGS` environment overrides
+used by `review-commits` are supported for the selected engine.
+
 ## Uploading to Gerrit
+
+### Uploading Reviews
 
 `upload-gerrit-reviews` reads a generated `ai-reviews` directory and uploads
 the per-commit findings to Gerrit with its REST API. It posts inline comments
@@ -125,6 +148,8 @@ no labels are voted. By default the uploader refuses to post a review when the
 reviewed commit is not Gerrit's current revision for the change; set
 `GERRIT_ALLOW_NON_CURRENT=1` to override.
 
+### Uploading Responses
+
 `respond-gerrit-reviews` reads the generated review files and a
 `DECISIONS.md` file in the format used by `prompts/process-reviews.md`, finds
 the already uploaded AI inline comments on Gerrit, and posts replies that
@@ -148,14 +173,6 @@ As with uploads, set `GERRIT_ALLOW_NON_CURRENT=1` to reply on old patch sets.
 `--interactive` shows a terminal response UI with progress, boxes, and
 color-coded prompts. Set `NO_COLOR=1` to disable colors.
 
-## Processing Review Feedback
-
-`prompts/process-reviews.md` is a single-shot agent prompt for processing
-generated review directories such as `ai-reviews/` or `reviews/`. Feed it to an
-agent from the repository under review when you want to triage findings, apply
-accepted fixes, append decisions to `DECISIONS.md`, squash clean fix commits
-into their target commits, and audit the final branch delta.
-
 ## Authentication
 
 Log in to each CLI normally before running the batch. The script reuses the
@@ -163,14 +180,14 @@ credentials and configuration of the installed command.
 
 ## Safety model
 
-The prompt forbids modifications, builds, tests, package managers, and network
-commands. Codex is explicitly placed in a read-only sandbox. Claude is limited
-to read access and selected read-only Git command patterns. Antigravity is run
-in non-interactive print mode; its exact permission configuration can vary by
-CLI release, so configure its Fine-Grained Permissions Engine to deny writes
-and shell commands other than read-only Git inspection before using it on a
-valuable working tree. For stronger isolation, run the whole process on a
-disposable clone.
+`review-commits` is read-only: Codex is explicitly placed in a read-only
+sandbox, Claude is limited to read access and selected read-only Git command
+patterns, and Antigravity is run in non-interactive print mode.
+
+`process-reviews` is intentionally not read-only. It starts an editing agent
+from the repository under review, with Codex using a `workspace-write` sandbox
+by default and Antigravity using `accept-edits` mode. For stronger isolation,
+run review processing on a disposable clone or inside Capsule.
 
 ## Configuration
 
@@ -250,44 +267,45 @@ This project's `Dockerfile` and `compose.yml` plug into
 checkout, no copying into the Capsule checkout required:
 
 ```bash
-export CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml
-cd /path/to/casual-capsule
-./capsule.sh --build-custom
-./capsule.sh review-commits --engine claude --base origin/master --head HEAD
+CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
+    /path/to/casual-capsule/capsule.sh review-commits \
+    --engine claude --base origin/master --head HEAD
 ```
 
 Upload a generated review directory with the same custom image:
 
 ```bash
-export CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml
-export GERRIT_HTTP_PASSWORD='<http-password-or-token>'
-cd /path/to/casual-capsule
-./capsule.sh --build-custom
-./capsule.sh env \
-  GERRIT_URL=https://gerrit.example.com \
-  GERRIT_USER='<gerrit-user>' \
-  GERRIT_HTTP_PASSWORD="$GERRIT_HTTP_PASSWORD" \
-  upload-gerrit-reviews --interactive ./ai-reviews
+CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
+    /path/to/casual-capsule/capsule.sh env \
+    GERRIT_URL=https://gerrit.example.com \
+    GERRIT_USER='<gerrit-user>' \
+    GERRIT_HTTP_PASSWORD='<http-password-or-token>' \
+    upload-gerrit-reviews --interactive ./ai-reviews
+```
+
+Process a generated review directory with the same custom image:
+
+```bash
+CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
+    /path/to/casual-capsule/capsule.sh process-reviews \
+    --engine codex --reviews ./ai-reviews
 ```
 
 Respond to uploaded Gerrit review comments from a processed decision log:
 
 ```bash
-export CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml
-export GERRIT_HTTP_PASSWORD='<http-password-or-token>'
-cd /path/to/casual-capsule
-./capsule.sh --build-custom
-./capsule.sh env \
-  GERRIT_URL=https://gerrit.example.com \
-  GERRIT_USER='<gerrit-user>' \
-  GERRIT_HTTP_PASSWORD="$GERRIT_HTTP_PASSWORD" \
-  respond-gerrit-reviews --interactive ./ai-reviews ./ai-reviews/DECISIONS.md
+CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
+    /path/to/casual-capsule/capsule.sh env \
+    GERRIT_URL=https://gerrit.example.com \
+    GERRIT_USER='<gerrit-user>' \
+    GERRIT_HTTP_PASSWORD='<http-password-or-token>' \
+    respond-gerrit-reviews --interactive ./ai-reviews ./ai-reviews/DECISIONS.md
 ```
 
 `--build-custom` layers this project's `bin/` and `prompts/` on top of the
-`casual-capsule-cli` base image and symlinks `review-commits` and
-`upload-gerrit-reviews` and `respond-gerrit-reviews` onto `PATH`. Rerun it
-after changing scripts under `bin/` or the prompt templates.
+`casual-capsule-cli` base image and symlinks `review-commits`,
+`process-reviews`, `upload-gerrit-reviews`, and `respond-gerrit-reviews` onto
+`PATH`. Rerun it after changing scripts under `bin/` or the prompt templates.
 
 To run `casual-review` inside a capsule directly from the CLI, the following
 alias can come handy (applying Codex as the AI engine and `xhigh` reasoning
@@ -315,7 +333,7 @@ Run local linters with:
 ./tests/check_all.sh
 ```
 
-`test_all.sh` checks command help paths and runs the Gerrit script tests under
+`test_all.sh` checks command help paths and runs the script tests under
 `tests/`.
 `check_all.sh` runs `shellcheck` over shell scripts plus `hadolint` over
 `Dockerfile`. When a linter is not installed locally, `check_all.sh` falls
