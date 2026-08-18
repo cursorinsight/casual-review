@@ -154,6 +154,44 @@ no labels are voted. By default the uploader refuses to post a review when the
 reviewed commit is not Gerrit's current revision for the change; set
 `GERRIT_ALLOW_NON_CURRENT=1` to override.
 
+### Posting through the browser instead of curl
+
+`--page FILE` is an alternative to `--interactive` and `--yolo` for hosts that
+have no Gerrit HTTP password, or that do not trust the Gerrit server's custom
+CA. It performs no HTTP request at all. Instead it stages every parsed finding
+into a single self-contained HTML file:
+
+```bash
+upload-gerrit-reviews --page ./gerrit-review.html ./ai-reviews
+```
+
+Open that file in the browser you already use for Gerrit, untick anything you
+do not want to post, then press **Copy snippet** and paste the result into the
+DevTools console of a signed-in Gerrit tab.
+
+The snippet runs on the Gerrit origin, so the browser supplies the session
+cookie and already trusts the custom CA. Gerrit's CSRF protection is satisfied
+the same way the Gerrit web UI satisfies it: the snippet reads the JS-readable
+`XSRF_TOKEN` cookie and sends it as the `X-Gerrit-Auth` header. No credential
+of any kind is written to the page.
+
+The snippet does the whole run, not just the POST, because the generating host
+cannot reach Gerrit: it resolves each `commit:<sha>` query to a change, honours
+`GERRIT_ALLOW_NON_CURRENT`, drops verdict messages that were already posted,
+and then posts. It reports progress and a final summary to the console.
+Inline-comment de-duplication is left to Gerrit through
+`omit_duplicate_comments`.
+
+One paste handles the whole batch. `--page` respects `--engine` and `--limit`,
+and reads `GERRIT_TAG`, `GERRIT_NOTIFY`, `GERRIT_LABELS_JSON`,
+`GERRIT_PROJECT`, `GERRIT_BRANCH`, `GERRIT_QUERY_EXTRA`, and
+`GERRIT_ALLOW_NON_CURRENT` exactly as the posting modes do. `GERRIT_URL` is
+optional here and is only recorded on the page as a reminder of which server
+to open; `GERRIT_USER` and `GERRIT_HTTP_PASSWORD` are not used.
+
+This mode covers `upload-gerrit-reviews` only. `respond-gerrit-reviews` still
+requires curl and a Gerrit HTTP password.
+
 ### Uploading Responses
 
 `respond-gerrit-reviews` reads the generated review files and a
@@ -295,6 +333,20 @@ Process a generated review directory with the same custom image:
 CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
     /path/to/casual-capsule/capsule.sh process-reviews \
     --engine codex --reviews ./ai-reviews
+```
+
+Inside a capsule the browser lives on the host, so `--page` is often the
+easier route: the capsule needs no Gerrit credentials and no custom CA, and
+the generated page is written into the mounted working directory for the host
+browser to open.
+
+```bash
+export CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml
+cd /path/to/casual-capsule
+./capsule.sh --build-custom
+./capsule.sh env \
+  GERRIT_URL=https://gerrit.example.com \
+  upload-gerrit-reviews --page ./gerrit-review.html ./ai-reviews
 ```
 
 Respond to uploaded Gerrit review comments from a processed decision log:

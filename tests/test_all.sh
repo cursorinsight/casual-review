@@ -63,6 +63,17 @@ run_cmd() {
   fi
 }
 
+run_fail() {
+  local name=$1
+
+  shift
+  if "$@" >/dev/null 2>&1; then
+    fail "$name"
+  else
+    pass "$name"
+  fi
+}
+
 section "Sanity"
 tmp=$(mktemp -d) || exit 1
 ln -s "$ROOT_DIR/bin/upload-gerrit-reviews" "$tmp/upload-gerrit-reviews"
@@ -95,6 +106,55 @@ run_cmd "tui tests" tests/tui_test.sh
 run_cmd "process-reviews tests" tests/process_reviews_test.sh
 run_cmd "upload-gerrit-reviews tests" tests/upload_gerrit_reviews_test.sh
 run_cmd "respond-gerrit-reviews tests" tests/respond_gerrit_reviews_test.sh
+
+section "Argument handling"
+run_fail "upload-gerrit-reviews --page without a value" \
+  bin/upload-gerrit-reviews --page
+run_fail "upload-gerrit-reviews --page with an empty value" \
+  bin/upload-gerrit-reviews --page '' ai-reviews
+
+section "Approval page"
+page_dir=$(mktemp -d)
+mkdir -p "$page_dir/ai-reviews/codex"
+cat >"$page_dir/ai-reviews/codex/001-0123456789ab.md" <<'EOF_REVIEW'
+# Commit review
+
+## Commit
+
+- Commit: `0123456789abcdef0123456789abcdef01234567`
+- Subject: Add upload script
+
+## Findings
+
+### [Major] Validate input
+
+- Confidence: High
+- Location: `bin/tool:42`
+- Gerrit action: Must fix
+
+Suggested Gerrit comment:
+
+> Please reject empty input.
+
+## Review verdict
+
+Needs changes
+EOF_REVIEW
+
+run_fail "upload-gerrit-reviews --page into a missing directory" \
+  bin/upload-gerrit-reviews --page "$page_dir/missing/page.html" \
+  "$page_dir/ai-reviews"
+run_cmd "upload-gerrit-reviews --page writes a page" \
+  bin/upload-gerrit-reviews --page "$page_dir/page.html" \
+  "$page_dir/ai-reviews"
+
+if grep -qF 'X-Gerrit-Auth' "$page_dir/page.html" 2>/dev/null; then
+  pass "approval page carries the Gerrit XSRF header"
+else
+  fail "approval page carries the Gerrit XSRF header"
+fi
+
+rm -rf "$page_dir"
 
 if (( status == 0 )); then
   printf '\nAll tests passed.\n'
