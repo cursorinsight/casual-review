@@ -8,7 +8,8 @@ changes were made.
 
 Default inputs:
 
-- Review directory: `ai-reviews/` or `reviews/`
+- Review directory: `ai-reviews/` or `reviews/`. If none of these exist, ask the
+user.
 - Base branch: read from generated review metadata first, for example
   `ai-reviews/README.md` or `reviews/README.md`; ask before falling back to
   `main` or `master`

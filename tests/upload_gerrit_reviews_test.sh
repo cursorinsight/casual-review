@@ -97,6 +97,13 @@ parse_review_file "$file"
 [[ -z "${COMMENT_LINES[1]}" ]] ||
   die "upload test: file-level comment line failed"
 
+parse_location_text "\`src-tauri/check-classify-deps.py:unresolvable\`" ||
+  die "upload test: placeholder location parse failed"
+[[ "$PARSED_LOCATION_PATH" == "src-tauri/check-classify-deps.py" ]] ||
+  die "upload test: placeholder location path failed"
+[[ -z "$PARSED_LOCATION_LINE" ]] ||
+  die "upload test: placeholder location line failed"
+
 initialize_acceptance
 comments_json=$(build_comments_json)
 export GERRIT_LABELS_JSON='{"Needs changes":{"Code-Review":-1}}'

@@ -71,7 +71,8 @@ For every likely real issue use:
 ### [SEVERITY] Short title
 
 - Confidence: High / Medium
-- Location: `path/to/file:line`
+- Location: `path/to/file:line`, or `path/to/file` alone when the
+  finding is not tied to a single line
 - Introduced by this commit: Yes / Probably
 - Gerrit action: Must fix / Should fix / Consider
 
@@ -82,6 +83,10 @@ Suggested Gerrit comment:
 > Concise, objective, technically justified comment suitable for posting.
 
 Use severity Critical, Major, or Minor.
+
+Never write a placeholder such as `unresolvable`, `unknown`, or `N/A`
+where a line number belongs. Give a real line number from the reviewed
+revision, or write the path alone.
 
 If there are no findings, write exactly:
 

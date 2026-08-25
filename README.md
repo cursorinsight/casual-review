@@ -88,6 +88,12 @@ the per-commit findings to Gerrit with its REST API. It posts inline comments
 from each `Suggested Gerrit comment:` block and posts the review verdict as
 the change message.
 
+Each finding's `Location:` line decides where its comment lands. `path:line`
+becomes a line comment, `path:line-range` uses the first line of the range,
+and a bare `path` becomes a file-level comment. Any other trailing `:suffix`
+is not a line number, so it is dropped and the comment is posted at file
+level on the remaining path.
+
 Dry-run is the default and makes no HTTP requests:
 
 ```bash

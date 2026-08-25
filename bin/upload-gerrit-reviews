@@ -189,6 +189,7 @@ append_finding_comment_line() {
 parse_location_span() {
   local span=$1
   local path_line_re='^(.+):([0-9]+)([-,][0-9,-]*)?$'
+  local trailing_token_re='^(.+):([^:/[:space:]]+)$'
 
   LOCATION_PATH=
   LOCATION_LINE=
@@ -197,6 +198,14 @@ parse_location_span() {
     LOCATION_PATH=${BASH_REMATCH[1]}
     LOCATION_LINE=${BASH_REMATCH[2]}
     return 0
+  fi
+
+  # A non-numeric ":suffix" (for example ":unresolvable" or
+  # ":unknown") is not a line number. Drop it so the finding degrades
+  # to a file-level comment on the real file instead of inventing a
+  # path that does not exist in the revision.
+  if [[ $span =~ $trailing_token_re ]]; then
+    span=${BASH_REMATCH[1]}
   fi
 
   case "$span" in

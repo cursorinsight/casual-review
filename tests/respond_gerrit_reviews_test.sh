@@ -150,6 +150,13 @@ parse_review_file "$review_file" ||
   die "respond test: review parse failed"
 [[ ${#COMMENT_PATHS[@]} -eq 2 ]] ||
   die "respond test: interleaved review comment count failed"
+
+parse_location_text "\`src-tauri/check-classify-deps.py:unresolvable\`" ||
+  die "respond test: placeholder location parse failed"
+[[ "$PARSED_LOCATION_PATH" == "src-tauri/check-classify-deps.py" ]] ||
+  die "respond test: placeholder location path failed"
+[[ -z "$PARSED_LOCATION_LINE" ]] ||
+  die "respond test: placeholder location line failed"
 comment_index=$(
   matching_review_comment_index "${DECISION_TITLES[0]}" "$review_file"
 ) ||
