@@ -69,12 +69,14 @@ ln -s "$ROOT_DIR/bin/upload-gerrit-reviews" "$tmp/upload-gerrit-reviews"
 ln -s "$ROOT_DIR/bin/respond-gerrit-reviews" "$tmp/respond-gerrit-reviews"
 ln -s "$ROOT_DIR/bin/process-reviews" "$tmp/process-reviews"
 require_readable bin/tui.sh
+require_readable bin/common.sh
 require_executable bin/review-commits
 require_executable bin/process-reviews
 require_executable bin/upload-gerrit-reviews
 require_executable bin/respond-gerrit-reviews
 require_executable tests/check_all.sh
 require_executable tests/test_all.sh
+require_executable tests/common_test.sh
 require_executable tests/tui_test.sh
 require_executable tests/process_reviews_test.sh
 require_executable tests/upload_gerrit_reviews_test.sh
@@ -88,6 +90,7 @@ run_cmd "upload-gerrit-reviews symlink --help" \
   "$tmp/upload-gerrit-reviews" --help
 run_cmd "respond-gerrit-reviews symlink --help" \
   "$tmp/respond-gerrit-reviews" --help
+run_cmd "common tests" tests/common_test.sh
 run_cmd "tui tests" tests/tui_test.sh
 run_cmd "process-reviews tests" tests/process_reviews_test.sh
 run_cmd "upload-gerrit-reviews tests" tests/upload_gerrit_reviews_test.sh

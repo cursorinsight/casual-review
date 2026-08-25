@@ -49,14 +49,13 @@ SCRIPT_DIR=$(
   CDPATH='' cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P
 )
 
+# shellcheck source=bin/common.sh
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/common.sh"
+
 # shellcheck source=bin/tui.sh
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/tui.sh"
-
-die() {
-  printf 'Error: %s\n' "$*" >&2
-  exit 1
-}
 
 warn() {
   WARNINGS=$((WARNINGS + 1))
@@ -67,15 +66,8 @@ warn() {
   fi
 }
 
-need() {
-  command -v "$1" >/dev/null 2>&1 || die "command not found: $1"
-}
-
 cleanup() {
-  if [[ -n "${CURL_AUTH_CONFIG:-}" ]]; then
-    rm -f -- "$CURL_AUTH_CONFIG"
-    CURL_AUTH_CONFIG=
-  fi
+  gerrit_cleanup_auth
 }
 
 trap cleanup EXIT
@@ -716,276 +708,13 @@ build_review_json() {
     '
 }
 
-change_query() {
-  local commit=$1
-  local query
-
-  query="commit:$commit"
-  [[ -z "${GERRIT_PROJECT:-}" ]] || query+=" project:${GERRIT_PROJECT}"
-  [[ -z "${GERRIT_BRANCH:-}" ]] || query+=" branch:${GERRIT_BRANCH}"
-  [[ -z "${GERRIT_QUERY_EXTRA:-}" ]] || query+=" ${GERRIT_QUERY_EXTRA}"
-  printf '%s' "$query"
-}
-
 validate_common_env() {
-  local notify=${GERRIT_NOTIFY:-NONE}
-
-  need jq
-
-  case "$notify" in
-    NONE|OWNER|OWNER_REVIEWERS|ALL) ;;
-    *) die "GERRIT_NOTIFY must be NONE, OWNER, OWNER_REVIEWERS, or ALL" ;;
-  esac
+  gerrit_validate_common_env
 
   if [[ -n "${GERRIT_LABELS_JSON:-}" ]]; then
     jq -e 'type == "object"' >/dev/null <<<"$GERRIT_LABELS_JSON" ||
       die "GERRIT_LABELS_JSON must be a JSON object"
   fi
-}
-
-GERRIT_URL_EFFECTIVE=
-CURL_AUTH_CONFIG=
-CURL_AUTH_ARGS=()
-CURL_TIMEOUT_ARGS=()
-
-curl_config_escape() {
-  local value=$1
-
-  value=${value//\\/\\\\}
-  value=${value//\"/\\\"}
-  printf '%s' "$value"
-}
-
-create_curl_auth_config() {
-  local user=$1
-  local password=$2
-  local config
-
-  case "$user$password" in
-    *$'\n'*|*$'\r'*)
-      die "Gerrit credentials must not contain newlines"
-      ;;
-  esac
-  case "$user" in
-    *:*)
-      die "GERRIT_USER must not contain ':'"
-      ;;
-  esac
-
-  cleanup
-  config=$(mktemp) || die "failed to create temporary curl config"
-  chmod 600 "$config" || {
-    rm -f -- "$config"
-    die "failed to restrict temporary curl config permissions"
-  }
-
-  if ! {
-    printf 'user = "'
-    curl_config_escape "$user"
-    printf ':'
-    curl_config_escape "$password"
-    printf '"\n'
-  } >"$config"; then
-    rm -f -- "$config"
-    die "failed to write temporary curl config"
-  fi
-
-  CURL_AUTH_CONFIG=$config
-}
-
-file_mode() {
-  local file=$1
-
-  if stat -c '%a' "$file" 2>/dev/null; then
-    return 0
-  fi
-  stat -f '%Lp' "$file" 2>/dev/null
-}
-
-validate_curl_timeouts() {
-  local connect_timeout=${GERRIT_CONNECT_TIMEOUT:-10}
-  local max_time=${GERRIT_MAX_TIME:-120}
-
-  [[ "$connect_timeout" =~ ^[1-9][0-9]*$ ]] ||
-    die "GERRIT_CONNECT_TIMEOUT must be a positive integer"
-  [[ "$max_time" =~ ^[1-9][0-9]*$ ]] ||
-    die "GERRIT_MAX_TIME must be a positive integer"
-
-  CURL_TIMEOUT_ARGS=(
-    --connect-timeout "$connect_timeout"
-    --max-time "$max_time"
-  )
-}
-
-validate_gerrit_env() {
-  local auth_type=${GERRIT_AUTH_TYPE:-basic}
-  local password
-
-  validate_common_env
-  need curl
-
-  [[ -n "${GERRIT_URL:-}" ]] || die "GERRIT_URL is required"
-  [[ -n "${GERRIT_USER:-}" ]] || die "GERRIT_USER is required"
-
-  password=${GERRIT_HTTP_PASSWORD:-${GERRIT_PASSWORD:-}}
-  [[ -n "$password" ]] ||
-    die "GERRIT_HTTP_PASSWORD or GERRIT_PASSWORD is required"
-
-  GERRIT_URL_EFFECTIVE=${GERRIT_URL%/}
-
-  case "$auth_type" in
-    basic|digest) ;;
-    *)
-      die "GERRIT_AUTH_TYPE must be basic or digest"
-      ;;
-  esac
-  validate_curl_timeouts
-
-  create_curl_auth_config "$GERRIT_USER" "$password"
-  unset GERRIT_HTTP_PASSWORD GERRIT_PASSWORD
-  password=
-
-  case "$auth_type" in
-    basic)
-      CURL_AUTH_ARGS=(--config "$CURL_AUTH_CONFIG")
-      ;;
-    digest)
-      CURL_AUTH_ARGS=(
-        --config "$CURL_AUTH_CONFIG"
-        --digest
-      )
-      ;;
-  esac
-}
-
-strip_xssi_file() {
-  local file=$1
-  local first
-
-  IFS= read -r first <"$file" || return 0
-  if [[ "$first" == ")]}'" ]]; then
-    sed '1d' "$file"
-  else
-    cat "$file"
-  fi
-}
-
-gerrit_get_json() {
-  local url=$1
-  local output
-  local status
-
-  output=$(mktemp)
-  if ! status=$(
-    curl -sS -w '%{http_code}' -o "$output" \
-      "${CURL_AUTH_ARGS[@]}" \
-      "${CURL_TIMEOUT_ARGS[@]}" \
-      -H 'Accept: application/json' \
-      "$url"
-  ); then
-    rm -f "$output"
-    return 1
-  fi
-
-  case "$status" in
-    2*) ;;
-    *)
-      strip_xssi_file "$output" >&2
-      rm -f "$output"
-      return 1
-      ;;
-  esac
-
-  strip_xssi_file "$output"
-  rm -f "$output"
-}
-
-gerrit_query_changes() {
-  local query=$1
-  local output
-  local status
-  local url
-
-  output=$(mktemp)
-  url="$GERRIT_URL_EFFECTIVE/a/changes/"
-  if ! status=$(
-    curl -sS -w '%{http_code}' -o "$output" \
-      "${CURL_AUTH_ARGS[@]}" \
-      "${CURL_TIMEOUT_ARGS[@]}" \
-      -H 'Accept: application/json' \
-      --get "$url" \
-      --data-urlencode "q=$query" \
-      --data-urlencode 'n=2' \
-      --data-urlencode 'o=CURRENT_REVISION' \
-      --data-urlencode 'pp=0'
-  ); then
-    rm -f "$output"
-    warn "Gerrit change query failed for: $query"
-    return 1
-  fi
-
-  case "$status" in
-    2*) ;;
-    *)
-      warn "Gerrit change query returned HTTP $status for: $query"
-      strip_xssi_file "$output" >&2
-      rm -f "$output"
-      return 1
-      ;;
-  esac
-
-  strip_xssi_file "$output"
-  rm -f "$output"
-}
-
-gerrit_find_change() {
-  local commit=$1
-  local query
-  local json
-  local count
-
-  query=$(change_query "$commit")
-  json=$(gerrit_query_changes "$query") || return 1
-  if ! count=$(jq 'length' <<<"$json"); then
-    warn "invalid Gerrit JSON response for query: $query"
-    return 1
-  fi
-
-  if ((count == 0)); then
-    warn "no Gerrit change found for query: $query"
-    return 1
-  fi
-  if ((count > 1)); then
-    warn "multiple Gerrit changes found for query: $query"
-    warn "set GERRIT_PROJECT, GERRIT_BRANCH, or GERRIT_QUERY_EXTRA"
-    return 1
-  fi
-
-  jq -r '.[0] | [._number, (.current_revision // "")] | @tsv' <<<"$json"
-}
-
-gerrit_list_comments() {
-  local change_number=$1
-  local revision=$2
-  local url
-
-  url="$GERRIT_URL_EFFECTIVE/a/changes/$change_number"
-  url="$url/revisions/$revision/comments/"
-  gerrit_get_json "$url" || {
-    warn "Gerrit comment list failed for change $change_number"
-    return 1
-  }
-}
-
-gerrit_list_messages() {
-  local change_number=$1
-  local url
-
-  url="$GERRIT_URL_EFFECTIVE/a/changes/$change_number/messages"
-  gerrit_get_json "$url" || {
-    warn "Gerrit message list failed for change $change_number"
-    return 1
-  }
 }
 
 comment_already_posted() {
@@ -1065,45 +794,8 @@ gerrit_post_review() {
   local change_number=$1
   local revision=$2
   local payload=$3
-  local output
-  local payload_file
-  local status
-  local url
 
-  output=$(mktemp)
-  payload_file=$(mktemp)
-  printf '%s' "$payload" >"$payload_file"
-  url="$GERRIT_URL_EFFECTIVE/a/changes/$change_number"
-  url="$url/revisions/$revision/review"
-
-  if ! status=$(
-    curl -sS -w '%{http_code}' -o "$output" \
-      "${CURL_AUTH_ARGS[@]}" \
-      "${CURL_TIMEOUT_ARGS[@]}" \
-      -H 'Accept: application/json' \
-      -H 'Content-Type: application/json; charset=UTF-8' \
-      -X POST \
-      --data-binary "@$payload_file" \
-      "$url"
-  ); then
-    rm -f "$output" "$payload_file"
-    warn "Gerrit review POST failed for change $change_number"
-    return 1
-  fi
-
-  rm -f "$payload_file"
-  case "$status" in
-    2*) ;;
-    *)
-      warn "Gerrit review POST returned HTTP $status for change $change_number"
-      strip_xssi_file "$output" >&2
-      rm -f "$output"
-      return 1
-      ;;
-  esac
-
-  strip_xssi_file "$output" >/dev/null
-  rm -f "$output"
+  gerrit_post_revision_review "$change_number" "$revision" "$payload" review
 }
 
 print_dry_run() {
