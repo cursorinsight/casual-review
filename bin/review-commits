@@ -39,8 +39,21 @@ Examples:
 USAGE
 }
 
-die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
-need() { command -v "$1" >/dev/null 2>&1 || die "command not found: $1"; }
+SCRIPT_PATH=${BASH_SOURCE[0]}
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR=$(
+    CDPATH='' cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P
+  )
+  SCRIPT_PATH=$(readlink "$SCRIPT_PATH")
+  [[ "$SCRIPT_PATH" == /* ]] || SCRIPT_PATH=$SCRIPT_DIR/$SCRIPT_PATH
+done
+SCRIPT_DIR=$(
+  CDPATH='' cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P
+)
+
+# shellcheck source=bin/common.sh
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/common.sh"
 
 # *_MODEL_RESOLVED / *_EFFORT_RESOLVED are populated by run_codex/run_claude
 # from the engine's own output after its first successful call this run, so
@@ -62,22 +75,8 @@ engine_effort() {
   esac
 }
 
-resolve_self() {
-  local src=$0
-  while [ -h "$src" ]; do
-    local dir
-    dir="$(CDPATH='' cd -- "$(dirname -- "$src")" && pwd)"
-    src="$(readlink -- "$src")"
-    case "$src" in
-      /*) ;;
-      *) src="$dir/$src" ;;
-    esac
-  done
-  CDPATH='' cd -- "$(dirname -- "$src")" && pwd
-}
-
-SELF_DIR="$(resolve_self)"
-PACKAGE_DIR="$(CDPATH='' cd -- "$SELF_DIR/.." && pwd)"
+SELF_DIR=$SCRIPT_DIR
+PACKAGE_DIR="$(CDPATH='' cd -- "$SELF_DIR/.." && pwd -P)"
 ENGINE=codex
 BASE_REF=origin/master
 HEAD_REF=HEAD
@@ -112,27 +111,14 @@ case "$ENGINE" in codex|claude|antigravity|all) ;; *) die "invalid engine: $ENGI
 
 if [[ -n "$MODEL_OPT" || -n "$EFFORT_OPT" ]]; then
   [[ "$ENGINE" != all ]] || die "--model/--effort require a single --engine (not 'all'); use CODEX_MODEL/CLAUDE_MODEL/ANTIGRAVITY_MODEL and CODEX_EFFORT/CLAUDE_EFFORT/ANTIGRAVITY_EFFORT instead"
-  case "$ENGINE" in
-    codex)
-      [[ -z "$MODEL_OPT" ]] || CODEX_MODEL=$MODEL_OPT
-      [[ -z "$EFFORT_OPT" ]] || CODEX_EFFORT=$EFFORT_OPT
-      ;;
-    claude)
-      [[ -z "$MODEL_OPT" ]] || CLAUDE_MODEL=$MODEL_OPT
-      [[ -z "$EFFORT_OPT" ]] || CLAUDE_EFFORT=$EFFORT_OPT
-      ;;
-    antigravity)
-      [[ -z "$MODEL_OPT" ]] || ANTIGRAVITY_MODEL=$MODEL_OPT
-      [[ -z "$EFFORT_OPT" ]] || ANTIGRAVITY_EFFORT=$EFFORT_OPT
-      ;;
-  esac
+  apply_engine_overrides "$ENGINE" "$MODEL_OPT" "$EFFORT_OPT"
 fi
 
 # Default: strip known API-key env vars so engines fall back to their
 # plan/subscription auth instead of silently billing via metered API
 # credits. --use-credits leaves them in place.
 if ((USE_CREDITS == 0)); then
-  unset ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY GEMINI_API_KEY
+  strip_api_credit_env
 fi
 
 need git
@@ -160,15 +146,16 @@ fi
 run_codex() {
   local prompt=$1 output=$2
   local bin=${CODEX_BIN:-codex}; need "$bin"
-  local -a extra=() model=() effort=()
-  [[ -z "${CODEX_EXTRA_ARGS:-}" ]] || read -r -a extra <<<"${CODEX_EXTRA_ARGS:-}"
-  [[ -z "${CODEX_MODEL:-}" ]] || model=(--model "$CODEX_MODEL")
-  [[ -z "${CODEX_EFFORT:-}" ]] || effort=(-c "model_reasoning_effort=\"$CODEX_EFFORT\"")
+  build_engine_arg_arrays codex
   # codex prints "model: ..." / "reasoning effort: ..." to stderr at startup;
   # capture it to recover the real values even when neither was overridden.
   local err_tmp status=0
   err_tmp=$(mktemp)
-  "$bin" exec --ephemeral --sandbox read-only -C "$REPO_ROOT" "${model[@]}" "${effort[@]}" "${extra[@]}" -o "$output" - <"$prompt" >/dev/null 2>"$err_tmp" || status=$?
+  "$bin" exec --ephemeral --sandbox read-only -C "$REPO_ROOT" \
+    "${ENGINE_MODEL_ARGS[@]}" \
+    "${ENGINE_EFFORT_ARGS[@]}" \
+    "${ENGINE_EXTRA_ARGS[@]}" \
+    -o "$output" - <"$prompt" >/dev/null 2>"$err_tmp" || status=$?
   cat "$err_tmp" >&2
   local resolved
   resolved=$(grep -m1 '^model: ' "$err_tmp" | sed 's/^model: *//')
@@ -183,10 +170,7 @@ run_claude() {
   local prompt=$1 output=$2
   local bin=${CLAUDE_BIN:-claude}; need "$bin"
   need jq
-  local -a extra=() model=() effort=()
-  [[ -z "${CLAUDE_EXTRA_ARGS:-}" ]] || read -r -a extra <<<"${CLAUDE_EXTRA_ARGS:-}"
-  [[ -z "${CLAUDE_MODEL:-}" ]] || model=(--model "$CLAUDE_MODEL")
-  [[ -z "${CLAUDE_EFFORT:-}" ]] || effort=(--effort "$CLAUDE_EFFORT")
+  build_engine_arg_arrays claude
   # --output-format json exposes modelUsage, letting us recover the real
   # model even when it wasn't overridden; it does not expose effort.
   local json_tmp status=0
@@ -199,7 +183,10 @@ run_claude() {
       --allowedTools 'Read' \
       'Bash(git diff *)' 'Bash(git show *)' 'Bash(git log *)' \
       'Bash(git rev-parse *)' 'Bash(git cat-file *)' \
-      "${model[@]}" "${effort[@]}" "${extra[@]}" <"$prompt" >"$json_tmp"
+      "${ENGINE_MODEL_ARGS[@]}" \
+      "${ENGINE_EFFORT_ARGS[@]}" \
+      "${ENGINE_EXTRA_ARGS[@]}" \
+      <"$prompt" >"$json_tmp"
   ) || status=$?
   if ((status == 0)); then
     jq -r '.result' "$json_tmp" >"$output"
@@ -214,13 +201,14 @@ run_claude() {
 run_antigravity() {
   local prompt=$1 output=$2
   local bin=${ANTIGRAVITY_BIN:-antigravity}; need "$bin"
-  local -a extra=() model=() effort=()
-  [[ -z "${ANTIGRAVITY_EXTRA_ARGS:-}" ]] || read -r -a extra <<<"${ANTIGRAVITY_EXTRA_ARGS:-}"
-  [[ -z "${ANTIGRAVITY_MODEL:-}" ]] || model=(--model "$ANTIGRAVITY_MODEL")
-  [[ -z "${ANTIGRAVITY_EFFORT:-}" ]] || effort=(--effort "$ANTIGRAVITY_EFFORT")
+  build_engine_arg_arrays antigravity
   (
     cd "$REPO_ROOT"
-    "$bin" -p "$(cat "$prompt")" "${model[@]}" "${effort[@]}" "${extra[@]}" >"$output"
+    "$bin" -p "$(cat "$prompt")" \
+      "${ENGINE_MODEL_ARGS[@]}" \
+      "${ENGINE_EFFORT_ARGS[@]}" \
+      "${ENGINE_EXTRA_ARGS[@]}" \
+      >"$output"
   )
 }
 

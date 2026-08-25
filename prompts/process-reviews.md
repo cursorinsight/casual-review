@@ -77,16 +77,19 @@ When a fix does not apply cleanly to only the reviewed commit:
 Use this append-only decision-log format:
 
 ```markdown
-## <ISO-8601 timestamp> - <short reviewed commit> - <short title>
+## <ISO-8601 timestamp> - <7-char reviewed commit> - <short title>
 
 - Review file: `<path>`
-- Reviewed commit: `<full hash>`
+- Reviewed commit: `<7-char hash>`
 - Decision: Fix / Skip / Inspect then fix / Inspect then skip
-- Fix commit: `<hash>` or `none`
-- Squash target: `<full hash>` or `none`
+- Fix commit: `<7-char hash>` or `none`
+- Squash target: `<7-char hash>` or `none`
 - Checks: `<commands run>` or `not run: <reason>`
 - Reasoning: <why this decision and implementation are correct>
 ```
+
+`Reasoning` is only the final rationale. Do not repeat source review text or
+add extra pseudo-fields there; use only the fields listed above.
 
 ## Stage 2: Squash Accepted Clean Fixes
 
