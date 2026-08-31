@@ -9,6 +9,7 @@ cd "$ROOT_DIR" || exit 1
 
 status=0
 tmp=
+labels_json='{"Needs changes":{"AI-Review":-1}}'
 
 # shellcheck disable=SC2317,SC2329
 cleanup() {
@@ -68,30 +69,50 @@ tmp=$(mktemp -d) || exit 1
 ln -s "$ROOT_DIR/bin/upload-gerrit-reviews" "$tmp/upload-gerrit-reviews"
 ln -s "$ROOT_DIR/bin/respond-gerrit-reviews" "$tmp/respond-gerrit-reviews"
 ln -s "$ROOT_DIR/bin/process-reviews" "$tmp/process-reviews"
+ln -s "$ROOT_DIR/bin/export-gerrit-reviews" "$tmp/export-gerrit-reviews"
+run_cmd "browser artifacts can be cleaned" make clean
+run_cmd "browser artifacts can be generated" \
+  env GERRIT_URL=https://example.com \
+    GERRIT_LABELS_JSON="$labels_json" make browser-artifacts
 require_readable bin/tui.sh
 require_readable bin/common.sh
+require_readable bin/gerrit-upload.sh
+require_readable browser/casual-review-upload-core.js
+require_readable Makefile
+require_readable browser/casual-review-upload.js
+require_readable browser/upload-gerrit-reviews.user.js
 require_executable bin/review-commits
 require_executable bin/process-reviews
+require_executable bin/export-gerrit-reviews
 require_executable bin/upload-gerrit-reviews
 require_executable bin/respond-gerrit-reviews
 require_executable tests/check_all.sh
 require_executable tests/test_all.sh
 require_executable tests/common_test.sh
 require_executable tests/tui_test.sh
+require_executable tests/export_gerrit_reviews_test.sh
+require_executable tests/gerrit_browser_upload_test.sh
 require_executable tests/process_reviews_test.sh
 require_executable tests/upload_gerrit_reviews_test.sh
 require_executable tests/respond_gerrit_reviews_test.sh
 run_cmd "review-commits --help" bin/review-commits --help
 run_cmd "process-reviews --help" bin/process-reviews --help
+run_cmd "export-gerrit-reviews --help" bin/export-gerrit-reviews --help
 run_cmd "upload-gerrit-reviews --help" bin/upload-gerrit-reviews --help
 run_cmd "respond-gerrit-reviews --help" bin/respond-gerrit-reviews --help
 run_cmd "process-reviews symlink --help" "$tmp/process-reviews" --help
+run_cmd "export-gerrit-reviews symlink --help" \
+  "$tmp/export-gerrit-reviews" --help
 run_cmd "upload-gerrit-reviews symlink --help" \
   "$tmp/upload-gerrit-reviews" --help
 run_cmd "respond-gerrit-reviews symlink --help" \
   "$tmp/respond-gerrit-reviews" --help
 run_cmd "common tests" tests/common_test.sh
 run_cmd "tui tests" tests/tui_test.sh
+run_cmd "browser artifacts are valid" \
+  env GERRIT_LABELS_JSON="$labels_json" make check-browser-artifacts
+run_cmd "export-gerrit-reviews tests" tests/export_gerrit_reviews_test.sh
+run_cmd "Gerrit browser upload tests" tests/gerrit_browser_upload_test.sh
 run_cmd "process-reviews tests" tests/process_reviews_test.sh
 run_cmd "upload-gerrit-reviews tests" tests/upload_gerrit_reviews_test.sh
 run_cmd "respond-gerrit-reviews tests" tests/respond_gerrit_reviews_test.sh

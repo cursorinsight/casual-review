@@ -83,6 +83,8 @@ used by `review-commits` are supported for the selected engine.
 
 ### Uploading Reviews
 
+#### CLI Uploads
+
 `upload-gerrit-reviews` reads a generated `ai-reviews` directory and uploads
 the per-commit findings to Gerrit with its REST API. It posts inline comments
 from each `Suggested Gerrit comment:` block and posts the review verdict as
@@ -131,6 +133,8 @@ GERRIT_BRANCH=master \
 upload-gerrit-reviews --interactive ./ai-reviews
 ```
 
+#### Labels and Patch Sets
+
 Optional review-label voting is deliberately explicit because Gerrit label
 names and scores are site policy:
 
@@ -147,6 +151,69 @@ Without `GERRIT_LABELS_JSON`, verdicts are still posted as review messages but
 no labels are voted. By default the uploader refuses to post a review when the
 reviewed commit is not Gerrit's current revision for the change; set
 `GERRIT_ALLOW_NON_CURRENT=1` to override.
+
+Browser userscripts and plugins also use `GERRIT_LABELS_JSON`, but at
+generation time. Run the `make` target with the variable set when you want
+browser-submitted verdicts to vote labels. If it is undefined, `make` prints a
+warning and the generated browser uploader does not add label votes beyond
+labels already present in the uploaded bundle.
+
+#### Browser Bundle Export
+
+For browser-based uploads, export one compressed JSON bundle per Gerrit change:
+
+```bash
+export-gerrit-reviews --engine claude ./ai-reviews
+```
+
+Bundles are written to `./ai-reviews/gerrit-browser-upload/` by default, using
+the 7-character reviewed commit hash as the file name.
+
+#### Tampermonkey Userscript
+
+For personal browser use, generate the Tampermonkey userscript for your Gerrit
+URL and install it in [Tampermonkey](https://www.tampermonkey.net/):
+
+```bash
+GERRIT_URL=https://gerrit.example.com/r \
+GERRIT_LABELS_JSON="$GERRIT_LABELS_JSON" \
+make userscript
+```
+
+Without `GERRIT_URL`, `make userscript` prompts for the URL. The target writes
+`browser/upload-gerrit-reviews.user.js` with a userscript `@match` line such
+as `https://gerrit.example.com/r/c/*`, preserving the scheme and base path.
+`GERRIT_URL` must include the scheme, such as `https://`.
+Open the matching Gerrit change page, click `Upload AI review`, load the
+matching `.json.gz` file, select or unselect items, then submit. The browser
+uploader uses the existing Gerrit web session and XSRF cookie; it does not need
+`GERRIT_HTTP_PASSWORD`. It refuses to submit if the bundle commit is not the
+current Gerrit revision, and it marks already-posted AI comments and verdicts
+as duplicates before submission.
+
+#### Gerrit Plugin
+
+Use either the userscript or the plugin, not both. As a server-wide
+alternative, generate and install the standalone Gerrit JavaScript plugin:
+
+```bash
+GERRIT_LABELS_JSON="$GERRIT_LABELS_JSON" make gerrit-plugin
+cp browser/casual-review-upload.js "$GERRIT_SITE/plugins/"
+```
+
+The file name is the Gerrit plugin name. After the plugin is loaded by Gerrit,
+refresh a change page and use the same `Upload AI review` flow. The plugin does
+not need a Tampermonkey `@match` host and uses the same browser session as the
+userscript. See Gerrit's JavaScript plugin documentation for standalone plugin
+loading details:
+<https://gerrit-review.googlesource.com/Documentation/pg-plugin-dev.html>
+
+#### Generated Browser Artifacts
+
+Both browser integrations are generated from
+`browser/casual-review-upload-core.js`. After editing the shared core, run
+`make browser-artifacts` to refresh both generated files. Generated browser
+artifacts are ignored by git.
 
 ### Uploading Responses
 
@@ -283,6 +350,14 @@ CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
     upload-gerrit-reviews --interactive ./ai-reviews
 ```
 
+Export browser-upload bundles from a generated review directory:
+
+```bash
+CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
+    /path/to/casual-capsule/capsule.sh export-gerrit-reviews \
+    --engine claude ./ai-reviews
+```
+
 Process a generated review directory with the same custom image:
 
 ```bash
@@ -304,8 +379,9 @@ CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
 
 `--build-custom` layers this project's `bin/` and `prompts/` on top of the
 `casual-capsule-cli` base image and symlinks `review-commits`,
-`process-reviews`, `upload-gerrit-reviews`, and `respond-gerrit-reviews` onto
-`PATH`. Rerun it after changing scripts under `bin/` or the prompt templates.
+`process-reviews`, `export-gerrit-reviews`, `upload-gerrit-reviews`, and
+`respond-gerrit-reviews` onto `PATH`. Rerun it after changing scripts under
+`bin/` or the prompt templates.
 
 To run `casual-review` inside a capsule directly from the CLI, the following
 alias can come handy (applying Codex as the AI engine and `xhigh` reasoning
@@ -324,6 +400,7 @@ alias review='CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
 Run local sanity tests with:
 
 ```bash
+make test
 ./tests/test_all.sh
 ```
 
@@ -339,6 +416,12 @@ Run local linters with:
 `Dockerfile`. When a linter is not installed locally, `check_all.sh` falls
 back to Docker. CI runs hadolint and shellcheck as separate checker steps and
 calls only `test_all.sh` from the test job.
+
+Remove generated browser artifacts with:
+
+```bash
+make clean
+```
 
 ## Notes
 
