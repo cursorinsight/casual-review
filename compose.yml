@@ -1,6 +1,6 @@
 services:
   cli:
-    image: mcgr-capsule:local
+    image: casual-review-cli:latest
     build:
       context: ${CAPSULE_CUSTOM_DIR}
       dockerfile: ${CAPSULE_CUSTOM_DIR}/Dockerfile
