@@ -93,8 +93,8 @@ the change message.
 Dry-run is the default and makes no HTTP requests:
 
 ```bash
-upload-gerrit-reviews ./ai-reviews
-upload-gerrit-reviews --dry-run ./ai-reviews
+upload-gerrit-reviews
+upload-gerrit-reviews --dry-run
 ```
 
 Posting modes require Gerrit connection settings in environment variables:
@@ -104,8 +104,8 @@ export GERRIT_URL=https://gerrit.example.com
 export GERRIT_USER="$USER"
 export GERRIT_HTTP_PASSWORD='<http-password-or-token>'
 
-upload-gerrit-reviews --interactive ./ai-reviews
-upload-gerrit-reviews --yolo ./ai-reviews
+upload-gerrit-reviews --interactive
+upload-gerrit-reviews --yolo
 ```
 
 When posting, the uploader passes credentials to `curl` through a temporary
@@ -130,8 +130,11 @@ constrain them:
 ```bash
 GERRIT_PROJECT=my/project \
 GERRIT_BRANCH=master \
-upload-gerrit-reviews --interactive ./ai-reviews
+upload-gerrit-reviews --interactive
 ```
+
+The default review directory is `./ai-reviews`. Pass a path only when using a
+different generated review directory.
 
 #### Labels and Patch Sets
 
@@ -163,7 +166,7 @@ labels already present in the uploaded bundle.
 For browser-based uploads, export one compressed JSON bundle per Gerrit change:
 
 ```bash
-export-gerrit-reviews --engine claude ./ai-reviews
+export-gerrit-reviews --engine claude
 ```
 
 Bundles are written to `./ai-reviews/gerrit-browser-upload/` by default, using
@@ -231,14 +234,18 @@ Decision matching uses the decision title; `Reasoning` is posted as-is and
 should contain only the final rationale.
 
 ```bash
-respond-gerrit-reviews --dry-run ./ai-reviews ./ai-reviews/DECISIONS.md
-respond-gerrit-reviews --interactive ./ai-reviews ./ai-reviews/DECISIONS.md
-respond-gerrit-reviews --yolo ./ai-reviews ./ai-reviews/DECISIONS.md
+respond-gerrit-reviews --dry-run
+respond-gerrit-reviews --interactive
+respond-gerrit-reviews --yolo
 ```
 
 As with uploads, set `GERRIT_ALLOW_NON_CURRENT=1` to reply on old patch sets.
 `--interactive` shows a terminal response UI with progress, boxes, and
 color-coded prompts. Set `NO_COLOR=1` to disable colors.
+
+The default review directory is `./ai-reviews`, and the default decisions file
+is `./ai-reviews/DECISIONS.md`. Pass a review directory to use its
+`DECISIONS.md`; pass both paths only when the decision log lives elsewhere.
 
 ## Authentication
 
@@ -347,7 +354,7 @@ CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
     GERRIT_URL=https://gerrit.example.com \
     GERRIT_USER='<gerrit-user>' \
     GERRIT_HTTP_PASSWORD='<http-password-or-token>' \
-    upload-gerrit-reviews --interactive ./ai-reviews
+    upload-gerrit-reviews --interactive
 ```
 
 Export browser-upload bundles from a generated review directory:
@@ -355,7 +362,7 @@ Export browser-upload bundles from a generated review directory:
 ```bash
 CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
     /path/to/casual-capsule/capsule.sh export-gerrit-reviews \
-    --engine claude ./ai-reviews
+    --engine claude
 ```
 
 Process a generated review directory with the same custom image:
@@ -374,7 +381,7 @@ CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
     GERRIT_URL=https://gerrit.example.com \
     GERRIT_USER='<gerrit-user>' \
     GERRIT_HTTP_PASSWORD='<http-password-or-token>' \
-    respond-gerrit-reviews --interactive ./ai-reviews ./ai-reviews/DECISIONS.md
+    respond-gerrit-reviews --interactive
 ```
 
 `--build-custom` layers this project's `bin/` and `prompts/` on top of the

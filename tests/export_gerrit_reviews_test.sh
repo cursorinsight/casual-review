@@ -94,6 +94,19 @@ jq -e '
   and (.reviews[0].message | contains("**Verdict:** Needs changes"))
 ' >/dev/null "$decoded" || die "export test: bundle JSON failed"
 
+(
+  cd "$tmp"
+  "$ROOT_DIR/bin/export-gerrit-reviews" --engine codex >/dev/null
+) || die "export test: default review directory failed"
+[[ -f "$reviews/gerrit-browser-upload/0123456.json.gz" ]] ||
+  die "export test: default output bundle missing"
+if (
+  cd "$tmp"
+  "$ROOT_DIR/bin/export-gerrit-reviews" --engine codex "" >/dev/null 2>&1
+); then
+  die "export test: explicit empty review directory accepted"
+fi
+
 limit_out=$tmp/limit-out
 write_review \
   "$reviews/codex/002-aaaaaaaaaaaa.md" \

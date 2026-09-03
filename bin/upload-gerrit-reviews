@@ -4,7 +4,7 @@ set -Eeuo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  upload-gerrit-reviews [options] AI_REVIEWS_DIR
+  upload-gerrit-reviews [options] [AI_REVIEWS_DIR]
 
 Options:
   --dry-run        parse and print what would be posted; no HTTP (default)
@@ -34,6 +34,9 @@ Optional environment:
   GERRIT_CONNECT_TIMEOUT  curl connect timeout seconds (default: 10)
   GERRIT_MAX_TIME         curl total request timeout seconds (default: 120)
   NO_COLOR                disable interactive colors
+
+Default arguments:
+  AI_REVIEWS_DIR          ai-reviews
 USAGE
 }
 
@@ -80,6 +83,7 @@ MODE=dry-run
 ENGINE_FILTER=
 LIMIT=0
 REVIEW_DIR=
+REVIEW_DIR_ARG_SET=0
 WARNINGS=0
 TOTAL_REVIEWS=0
 POSTED_REVIEWS=0
@@ -125,8 +129,10 @@ while (($#)); do
       die "unknown option: $1"
       ;;
     *)
-      [[ -z "$REVIEW_DIR" ]] || die "only one AI_REVIEWS_DIR is supported"
+      ((REVIEW_DIR_ARG_SET == 0)) ||
+        die "only one AI_REVIEWS_DIR is supported"
       REVIEW_DIR=$1
+      REVIEW_DIR_ARG_SET=1
       shift
       ;;
   esac
@@ -348,7 +354,11 @@ main() {
   local engine
   local summary_body
 
-  [[ -n "$REVIEW_DIR" ]] || die "AI_REVIEWS_DIR is required"
+  if ((REVIEW_DIR_ARG_SET)); then
+    [[ -n "$REVIEW_DIR" ]] || die "AI_REVIEWS_DIR must not be empty"
+  else
+    REVIEW_DIR=ai-reviews
+  fi
   [[ -d "$REVIEW_DIR" ]] || die "not a directory: $REVIEW_DIR"
 
   validate_common_env

@@ -97,6 +97,17 @@ parse_review_file "$file"
 [[ -z "${COMMENT_LINES[1]}" ]] ||
   die "upload test: file-level comment line failed"
 
+(
+  cd "$tmp"
+  "$ROOT_DIR/bin/upload-gerrit-reviews" --dry-run >/dev/null
+) || die "upload test: default review directory failed"
+if (
+  cd "$tmp"
+  "$ROOT_DIR/bin/upload-gerrit-reviews" --dry-run "" >/dev/null 2>&1
+); then
+  die "upload test: explicit empty review directory accepted"
+fi
+
 initialize_acceptance
 comments_json=$(build_comments_json)
 export GERRIT_LABELS_JSON='{"Needs changes":{"Code-Review":-1}}'

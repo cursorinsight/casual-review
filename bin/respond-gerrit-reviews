@@ -4,7 +4,7 @@ set -Eeuo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  respond-gerrit-reviews [options] AI_REVIEWS_DIR DECISIONS_MD
+  respond-gerrit-reviews [options] [AI_REVIEWS_DIR [DECISIONS_MD]]
 
 Options:
   --dry-run        parse and print what would be posted; no HTTP (default)
@@ -32,6 +32,10 @@ Optional environment:
   GERRIT_CONNECT_TIMEOUT  curl connect timeout seconds (default: 10)
   GERRIT_MAX_TIME         curl total request timeout seconds (default: 120)
   NO_COLOR                disable interactive colors
+
+Default arguments:
+  AI_REVIEWS_DIR          ai-reviews
+  DECISIONS_MD            AI_REVIEWS_DIR/DECISIONS.md
 USAGE
 }
 
@@ -73,7 +77,9 @@ trap cleanup EXIT
 MODE=dry-run
 LIMIT=0
 REVIEW_DIR=
+REVIEW_DIR_ARG_SET=0
 DECISIONS_FILE=
+DECISIONS_FILE_ARG_SET=0
 WARNINGS=0
 TOTAL_DECISIONS=0
 MATCHED_DECISIONS=0
@@ -116,10 +122,12 @@ while (($#)); do
       die "unknown option: $1"
       ;;
     *)
-      if [[ -z "$REVIEW_DIR" ]]; then
+      if ((REVIEW_DIR_ARG_SET == 0)); then
         REVIEW_DIR=$1
-      elif [[ -z "$DECISIONS_FILE" ]]; then
+        REVIEW_DIR_ARG_SET=1
+      elif ((DECISIONS_FILE_ARG_SET == 0)); then
         DECISIONS_FILE=$1
+        DECISIONS_FILE_ARG_SET=1
       else
         die "too many positional arguments"
       fi
@@ -1613,8 +1621,16 @@ main() {
   local i=0
   local summary_body
 
-  [[ -n "$REVIEW_DIR" ]] || die "AI_REVIEWS_DIR is required"
-  [[ -n "$DECISIONS_FILE" ]] || die "DECISIONS_MD is required"
+  if ((REVIEW_DIR_ARG_SET)); then
+    [[ -n "$REVIEW_DIR" ]] || die "AI_REVIEWS_DIR must not be empty"
+  else
+    REVIEW_DIR=ai-reviews
+  fi
+  if ((DECISIONS_FILE_ARG_SET)); then
+    [[ -n "$DECISIONS_FILE" ]] || die "DECISIONS_MD must not be empty"
+  else
+    DECISIONS_FILE=$REVIEW_DIR/DECISIONS.md
+  fi
   [[ -d "$REVIEW_DIR" ]] || die "not a directory: $REVIEW_DIR"
   [[ -r "$DECISIONS_FILE" ]] || die "not readable: $DECISIONS_FILE"
 
