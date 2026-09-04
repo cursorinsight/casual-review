@@ -95,6 +95,74 @@ jq -e '
 ' >/dev/null "$decoded" || die "export test: bundle JSON failed"
 
 (
+  # shellcheck source=../bin/export-gerrit-reviews
+  # shellcheck disable=SC1091
+  source "$ROOT_DIR/bin/export-gerrit-reviews"
+
+  TMP_DIR=$tmp/append-failure
+  mkdir -p "$TMP_DIR"
+  create_bundle "$commit"
+  bundle_file=${BUNDLE_FILES[$BUNDLE_INDEX]}
+  before=$(cat "$bundle_file")
+  if append_review_to_bundle "$BUNDLE_INDEX" '{not-json' 2>/dev/null; then
+    die "export test: invalid append JSON succeeded"
+  fi
+  after=$(cat "$bundle_file")
+  [[ "$after" == "$before" ]] ||
+    die "export test: failed append clobbered bundle"
+  [[ ! -e "$TMP_DIR/update.json" ]] ||
+    die "export test: failed append left update file"
+)
+
+(
+  # shellcheck source=../bin/export-gerrit-reviews
+  # shellcheck disable=SC1091
+  source "$ROOT_DIR/bin/export-gerrit-reviews"
+
+  TMP_DIR=$tmp/create-failure
+  mkdir -p "$TMP_DIR"
+  # shellcheck disable=SC2329
+  jq() {
+    printf partial
+    return 1
+  }
+  if create_bundle "$commit" >/dev/null 2>&1; then
+    die "export test: invalid create succeeded"
+  fi
+  [[ ${#BUNDLE_FILES[@]} -eq 0 ]] ||
+    die "export test: failed create registered bundle"
+  [[ ! -e "$TMP_DIR/0123456.json" ]] ||
+    die "export test: failed create left bundle file"
+)
+
+(
+  # shellcheck source=../bin/export-gerrit-reviews
+  # shellcheck disable=SC1091
+  source "$ROOT_DIR/bin/export-gerrit-reviews"
+
+  TMP_DIR=$tmp/write-failure
+  OUTPUT_DIR=$tmp/write-out
+  mkdir -p "$TMP_DIR" "$OUTPUT_DIR"
+  printf '{"ok":true}' >"$TMP_DIR/0123456.json"
+  printf old >"$OUTPUT_DIR/0123456.json.gz"
+  BUNDLE_FILES=("$TMP_DIR/0123456.json")
+  # shellcheck disable=SC2034
+  BUNDLE_SHORTS=(0123456)
+  # shellcheck disable=SC2329
+  gzip() {
+    printf partial
+    return 1
+  }
+  if write_bundles >/dev/null 2>&1; then
+    die "export test: failed gzip write succeeded"
+  fi
+  [[ "$(cat "$OUTPUT_DIR/0123456.json.gz")" == old ]] ||
+    die "export test: failed gzip write clobbered output"
+  [[ ! -e "$OUTPUT_DIR/0123456.json.gz.tmp" ]] ||
+    die "export test: failed gzip write left temp"
+)
+
+(
   cd "$tmp"
   "$ROOT_DIR/bin/export-gerrit-reviews" --engine codex >/dev/null
 ) || die "export test: default review directory failed"

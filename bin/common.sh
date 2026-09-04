@@ -10,6 +10,53 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "command not found: $1"
 }
 
+write_file_from_command() {
+  local output=$1
+
+  shift
+  if ! "$@" >"$output"; then
+    rm -f -- "$output"
+    return 1
+  fi
+}
+
+write_file_from_string() {
+  local output=$1
+  local content=$2
+
+  if ! printf '%s' "$content" >"$output"; then
+    rm -f -- "$output"
+    return 1
+  fi
+}
+
+replace_file_from_command() {
+  local target=$1
+  local tmp=$2
+
+  shift 2
+  write_file_from_command "$tmp" "$@" || return 1
+  if ! mv -- "$tmp" "$target"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
+replace_file_from_filter() {
+  local target=$1
+  local tmp=$2
+
+  shift 2
+  if ! "$@" <"$target" >"$tmp"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  if ! mv -- "$tmp" "$target"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
 apply_engine_overrides() {
   local engine=$1
   local model=$2
@@ -266,7 +313,7 @@ gerrit_get_json() {
   local output
   local status
 
-  output=$(mktemp)
+  output=$(mktemp) || return 1
   if ! status=$(
     curl -sS -w '%{http_code}' -o "$output" \
       "${CURL_AUTH_ARGS[@]}" \
@@ -296,7 +343,10 @@ gerrit_query_changes() {
   local status
   local url
 
-  output=$(mktemp)
+  output=$(mktemp) || {
+    warn "failed to create temporary Gerrit query response file"
+    return 1
+  }
   url="$GERRIT_URL_EFFECTIVE/a/changes/"
   if ! status=$(
     curl -sS -w '%{http_code}' -o "$output" \
@@ -385,9 +435,20 @@ gerrit_post_revision_review() {
   local status
   local url
 
-  output=$(mktemp)
-  payload_file=$(mktemp)
-  printf '%s' "$payload" >"$payload_file"
+  output=$(mktemp) || {
+    warn "failed to create temporary Gerrit $label response file"
+    return 1
+  }
+  payload_file=$(mktemp) || {
+    rm -f "$output"
+    warn "failed to create temporary Gerrit $label payload file"
+    return 1
+  }
+  if ! write_file_from_string "$payload_file" "$payload"; then
+    rm -f "$output"
+    warn "failed to write temporary Gerrit $label payload file"
+    return 1
+  fi
   url="$GERRIT_URL_EFFECTIVE/a/changes/$change_number"
   url="$url/revisions/$revision/review"
 

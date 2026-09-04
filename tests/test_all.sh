@@ -93,6 +93,7 @@ require_executable tests/tui_test.sh
 require_executable tests/export_gerrit_reviews_test.sh
 require_executable tests/gerrit_browser_upload_test.sh
 require_executable tests/process_reviews_test.sh
+require_executable tests/review_commits_test.sh
 require_executable tests/upload_gerrit_reviews_test.sh
 require_executable tests/respond_gerrit_reviews_test.sh
 run_cmd "review-commits --help" bin/review-commits --help
@@ -114,6 +115,7 @@ run_cmd "browser artifacts are valid" \
 run_cmd "export-gerrit-reviews tests" tests/export_gerrit_reviews_test.sh
 run_cmd "Gerrit browser upload tests" tests/gerrit_browser_upload_test.sh
 run_cmd "process-reviews tests" tests/process_reviews_test.sh
+run_cmd "review-commits tests" tests/review_commits_test.sh
 run_cmd "upload-gerrit-reviews tests" tests/upload_gerrit_reviews_test.sh
 run_cmd "respond-gerrit-reviews tests" tests/respond_gerrit_reviews_test.sh
 

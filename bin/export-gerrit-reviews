@@ -139,7 +139,8 @@ create_bundle() {
   local idx
 
   created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-  jq -c -n \
+  # shellcheck disable=SC2016
+  write_file_from_command "$file" jq -c -n \
     --arg schema casual-review.gerrit-upload.v1 \
     --arg created_at "$created_at" \
     --arg source_directory "$REVIEW_DIR" \
@@ -163,7 +164,7 @@ create_bundle() {
           verdict_count: 0
         }
       }
-    ' >"$file"
+    ' || return 1
 
   idx=${#BUNDLE_COMMITS[@]}
   BUNDLE_COMMITS[idx]=$commit
@@ -178,14 +179,15 @@ append_review_to_bundle() {
   local current=${BUNDLE_FILES[$idx]}
   local next=$TMP_DIR/update.json
 
-  jq -c --argjson review "$review_json" '
+  # shellcheck disable=SC2016
+  replace_file_from_filter "$current" "$next" \
+    jq -c --argjson review "$review_json" '
     .reviews += [$review]
     | .summary.review_count = (.reviews | length)
     | .summary.comment_count = ([.reviews[].comments | length] | add // 0)
     | .summary.verdict_count = ([.reviews[] | select(.message != "")] |
         length)
-  ' <"$current" >"$next"
-  mv -- "$next" "$current"
+  '
 }
 
 review_has_exportable_items() {
@@ -218,7 +220,7 @@ process_review_file() {
   bundle_index_for_commit "$REVIEW_COMMIT"
   idx=$BUNDLE_INDEX
   if [[ "$idx" == -1 ]]; then
-    create_bundle "$REVIEW_COMMIT"
+    create_bundle "$REVIEW_COMMIT" || return 1
     idx=$BUNDLE_INDEX
   fi
   append_review_to_bundle "$idx" "$review_json" || return 1
@@ -230,12 +232,12 @@ write_bundles() {
   local out
   local tmp_out
 
-  mkdir -p "$OUTPUT_DIR"
+  mkdir -p "$OUTPUT_DIR" || return 1
   while ((i < ${#BUNDLE_FILES[@]})); do
     out=$OUTPUT_DIR/${BUNDLE_SHORTS[$i]}.json.gz
     tmp_out=$out.tmp
-    gzip -c "${BUNDLE_FILES[$i]}" >"$tmp_out"
-    mv -- "$tmp_out" "$out"
+    replace_file_from_command "$out" "$tmp_out" \
+      gzip -c "${BUNDLE_FILES[$i]}" || return 1
     printf 'Wrote %s\n' "$out"
     i=$((i + 1))
   done
@@ -278,7 +280,7 @@ main() {
     fi
   done
 
-  write_bundles
+  write_bundles || return 1
   printf '\nReviews parsed: %s\n' "$TOTAL_REVIEWS"
   printf 'Reviews skipped: %s\n' "$SKIPPED_REVIEWS"
   printf 'Reviews exported: %s\n' "$EXPORTED_REVIEWS"
