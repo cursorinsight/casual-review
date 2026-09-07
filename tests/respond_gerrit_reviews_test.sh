@@ -134,6 +134,26 @@ cat >"$decisions" <<EOF_DECISIONS
 - Reasoning: Mismatched review files must not be posted.
 EOF_DECISIONS
 
+mkdir -p "$tmp/ai-reviews"
+cp -- "$decisions" "$tmp/ai-reviews/DECISIONS.md"
+(
+  cd "$tmp"
+  "$ROOT_DIR/bin/respond-gerrit-reviews" --dry-run >/dev/null 2>&1
+) || die "respond test: default review and decisions paths failed"
+if (
+  cd "$tmp"
+  "$ROOT_DIR/bin/respond-gerrit-reviews" --dry-run "" >/dev/null 2>&1
+); then
+  die "respond test: explicit empty review directory accepted"
+fi
+if (
+  cd "$tmp"
+  "$ROOT_DIR/bin/respond-gerrit-reviews" \
+    --dry-run ai-reviews "" >/dev/null 2>&1
+); then
+  die "respond test: explicit empty decisions file accepted"
+fi
+
 parse_decisions_file "$decisions"
 [[ ${#DECISION_TITLES[@]} -eq 5 ]] ||
   die "respond test: decision count failed"

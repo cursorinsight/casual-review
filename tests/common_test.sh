@@ -28,6 +28,44 @@ trap cleanup EXIT
 
 tmp=$(mktemp -d)
 
+helper_out=$tmp/helper.out
+write_file_from_command "$helper_out" printf ok ||
+  die "common test: command write helper failed"
+[[ "$(cat "$helper_out")" == ok ]] ||
+  die "common test: command write helper content failed"
+write_file_from_string "$helper_out" payload ||
+  die "common test: string write helper failed"
+[[ "$(cat "$helper_out")" == payload ]] ||
+  die "common test: string write helper content failed"
+
+printf old >"$helper_out"
+if replace_file_from_command \
+    "$helper_out" \
+    "$tmp/helper.tmp" \
+    sh -c 'printf bad; exit 1';
+then
+  die "common test: failed command replace succeeded"
+fi
+[[ "$(cat "$helper_out")" == old ]] ||
+  die "common test: failed command replace clobbered target"
+[[ ! -e "$tmp/helper.tmp" ]] ||
+  die "common test: failed command replace left temp"
+
+printf lower >"$helper_out"
+if replace_file_from_filter \
+    "$helper_out" \
+    "$tmp/filter.tmp" \
+    sh -c 'cat; exit 1';
+then
+  die "common test: failed filter replace succeeded"
+fi
+[[ "$(cat "$helper_out")" == lower ]] ||
+  die "common test: failed filter replace clobbered target"
+replace_file_from_filter "$helper_out" "$tmp/filter.tmp" tr a-z A-Z ||
+  die "common test: successful filter replace failed"
+[[ "$(cat "$helper_out")" == LOWER ]] ||
+  die "common test: successful filter replace content failed"
+
 apply_engine_overrides codex codex-model xhigh
 [[ "${CODEX_MODEL:-}" == codex-model ]] ||
   die "common test: codex model override failed"
@@ -85,6 +123,9 @@ auth_mode=$(file_mode "$auth_config") ||
 gerrit_cleanup_auth
 [[ ! -e "$auth_config" ]] ||
   die "common test: curl auth config cleanup failed"
+TMPDIR=$tmp/no-such-dir \
+  gerrit_post_revision_review 123 abcdef1 '{}' review >/dev/null 2>&1 &&
+  die "common test: Gerrit POST accepted failed temp creation"
 
 unset GERRIT_CONNECT_TIMEOUT GERRIT_MAX_TIME
 validate_curl_timeouts

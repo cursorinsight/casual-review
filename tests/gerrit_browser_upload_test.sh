@@ -1,0 +1,325 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT_DIR="$(
+  CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P
+)"
+
+cd "$ROOT_DIR"
+
+tmp=$(mktemp -d)
+
+cleanup() {
+  rm -rf -- "$tmp"
+}
+
+trap cleanup EXIT
+
+die() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+command -v node >/dev/null 2>&1 ||
+  die "node is required for Gerrit browser upload tests"
+
+LABELS_JSON='{"Needs changes":{"AI-Review":-1}}'
+
+(
+  unset GERRIT_LABELS_JSON
+  GERRIT_URL=https://example.com \
+    USER_SCRIPT="$tmp/upload-gerrit-reviews.user.js" \
+    GERRIT_PLUGIN="$tmp/casual-review-upload.js" \
+    make browser-artifacts >/dev/null 2>"$tmp/missing-labels.log"
+)
+grep -q 'GERRIT_LABELS_JSON is undefined' "$tmp/missing-labels.log" ||
+  die "missing undefined GERRIT_LABELS_JSON warning"
+
+if GERRIT_URL=example.com \
+  GERRIT_LABELS_JSON="$LABELS_JSON" \
+  USER_SCRIPT="$tmp/bad-url.user.js" \
+  make userscript >/dev/null 2>"$tmp/bad-url.log"; then
+  die "userscript accepted GERRIT_URL without scheme"
+fi
+grep -q 'GERRIT_URL must include scheme' "$tmp/bad-url.log" ||
+  die "missing bad GERRIT_URL error"
+
+GERRIT_URL=https://example.com/r \
+  GERRIT_LABELS_JSON="$LABELS_JSON" \
+  make browser-artifacts >/dev/null
+
+node --check browser/casual-review-upload-core.js >/dev/null
+node --check browser/casual-review-upload.js >/dev/null
+node --check browser/upload-gerrit-reviews.user.js >/dev/null
+
+node <<'EOF_NODE'
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const api = require('./browser/casual-review-upload-core.js');
+
+const pluginText = fs.readFileSync(
+  './browser/casual-review-upload.js',
+  'utf8'
+);
+const userScriptText = fs.readFileSync(
+  './browser/upload-gerrit-reviews.user.js',
+  'utf8'
+);
+assert.equal(
+  (pluginText.match(/root\.Gerrit\.install\(/g) || []).length,
+  1
+);
+assert.match(userScriptText, /@match\s+https:\/\/example\.com\/r\/c\/\*/);
+assert.equal(userScriptText.includes('"AI-Review":-1'), true);
+assert.equal(pluginText.includes('"AI-Review":-1'), true);
+assert.equal(userScriptText.includes("text: 'CANCEL'"), true);
+assert.equal(userScriptText.includes("text: 'SEND'"), true);
+assert.equal(userScriptText.includes("text: 'UNSELECT ALL'"), true);
+assert.equal(userScriptText.includes('crgu-actions-left'), true);
+assert.equal(userScriptText.includes('crgu-actions-right'), true);
+assert.equal(userScriptText.includes('crgu-backdrop'), true);
+assert.equal(userScriptText.includes("elt('gr-button'"), true);
+assert.equal(userScriptText.includes("primary: ''"), true);
+assert.equal(userScriptText.includes("link: ''"), true);
+assert.equal(userScriptText.includes('font: 14px Roboto'), true);
+
+assert.equal(
+  api.getChangeNumberFromUrl('https://gerrit.example.com/c/proj/+/123/4'),
+  '123'
+);
+assert.equal(
+  api.getChangeNumberFromUrl('https://gerrit.example.com/r/c/a/b/+/456'),
+  '456'
+);
+assert.equal(
+  api.getBasePathFromUrl('https://gerrit.example.com/r/c/a/b/+/456'),
+  '/r'
+);
+assert.equal(
+  api.getPatchsetFromUrl('https://gerrit.example.com/c/proj/+/123/4'),
+  '4'
+);
+assert.equal(
+  api.getPatchsetFromUrl('https://gerrit.example.com/r/c/a/b/+/456'),
+  null
+);
+assert.deepEqual(
+  api.getRouteInfo('https://gerrit.example.com/r/c/a/b/+/456/7'),
+  {
+    basePath: '/r',
+    changeNumber: '456',
+    patchset: '7',
+    key: '/r|456|7',
+  }
+);
+assert.equal(
+  api.getRouteInfo('https://gerrit.example.com/r/c/a/b/+/456').key,
+  '/r|456|current'
+);
+assert.equal(api.stripXssi(")]}'\n{\"ok\":true}"), '{"ok":true}');
+assert.equal(
+  api.messageMatches('**[AI/codex] Major:** Validate input', '', 'input', ''),
+  true
+);
+const directReply = {};
+assert.equal(
+  api.findElementById({
+    getElementById: id => id === 'replyBtn' ? directReply : null,
+    querySelectorAll: () => [],
+  }, 'replyBtn'),
+  directReply
+);
+const shadowReply = {};
+const shadowRoot = {
+  getElementById: id => id === 'replyBtn' ? shadowReply : null,
+  querySelectorAll: () => [],
+};
+assert.equal(
+  api.findElementById({
+    getElementById: () => null,
+    querySelectorAll: () => [{shadowRoot}],
+  }, 'replyBtn'),
+  shadowReply
+);
+assert.equal(api.badgeText('Major'), 'major');
+assert.equal(api.badgeText('Minor'), 'minor');
+let removed = false;
+let backdropRemoved = false;
+let reloaded = false;
+const oldLocation = globalThis.location;
+globalThis.location = {reload: () => { reloaded = true; }};
+const state = {
+  backdrop: {remove: () => { backdropRemoved = true; }},
+  panel: {remove: () => { removed = true; }},
+};
+api.finishSuccessfulSubmission(state);
+assert.equal(backdropRemoved, true);
+assert.equal(removed, true);
+assert.equal(reloaded, true);
+assert.equal(state.backdrop, null);
+assert.equal(state.panel, null);
+if (oldLocation === undefined) delete globalThis.location;
+else globalThis.location = oldLocation;
+
+const bundle = {
+  schema: api.SCHEMA,
+  commit: '0123456789abcdef0123456789abcdef01234567',
+  commit_short: '0123456',
+  tag: 'autogenerated:casual-review',
+  notify: 'NONE',
+  reviews: [{
+    engine: 'codex',
+    commit_short: '0123456',
+    verdict: 'Needs changes',
+    message_marker: 'AI review from codex for 0123456',
+    message: 'AI review from codex for 0123456\n\n**Verdict:** Needs changes',
+    labels: {'Code-Review': -1},
+    comments: [
+      {
+        path: 'bin/tool',
+        line: 42,
+        unresolved: true,
+        message: '**[AI/codex] Major:** Validate input\n\nPlease fix.',
+        title: 'Validate input',
+        body: 'Please fix.',
+      },
+      {
+        path: 'README.md',
+        unresolved: false,
+        message: '**[AI/codex] Minor:** Update docs\n\nExplain it.',
+        title: 'Update docs',
+        body: 'Explain it.',
+      },
+    ],
+  }],
+};
+const remoteComments = {
+  'bin/tool': [{
+    id: 'abc',
+    line: 42,
+    message: '[AI/codex] Major: Validate input',
+  }],
+};
+const remoteMessages = [{
+  tag: 'autogenerated:casual-review',
+  message: 'Patch Set 1:\nAI review from codex for 0123456\nNeeds changes',
+}];
+
+api.validateBundleForChange(bundle, bundle.commit);
+assert.equal(
+  api.selectRevisionForRoute({
+    current_revision: bundle.commit,
+    revisions: {[bundle.commit]: {_number: 3}},
+  }, null),
+  bundle.commit
+);
+assert.equal(
+  api.selectRevisionForRoute({
+    current_revision: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    revisions: {[bundle.commit]: {_number: 3}},
+  }, '3'),
+  bundle.commit
+);
+assert.throws(
+  () => api.selectRevisionForRoute({
+    current_revision: bundle.commit,
+    revisions: {[bundle.commit]: {_number: 3}},
+  }, '4'),
+  /Patch set 4/
+);
+assert.throws(
+  () => api.validateBundleForChange(
+    bundle,
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  ),
+  /not current Gerrit revision/
+);
+
+const items = api.flattenBundleItems(bundle, remoteComments, remoteMessages);
+assert.equal(items.length, 3);
+assert.equal(items[0].duplicate, true);
+assert.equal(items[1].duplicate, false);
+assert.equal(items[2].duplicate, true);
+
+const payload = api.buildReviewPayload(bundle, items);
+assert.deepEqual(Object.keys(payload.comments), ['README.md']);
+assert.equal(
+  payload.comments['README.md'][0].message.includes('Update docs'),
+  true
+);
+assert.equal(payload.message, undefined);
+assert.equal(payload.labels, undefined);
+assert.equal(payload.notify, 'NONE');
+assert.equal(payload.omit_duplicate_comments, true);
+
+items[2].duplicate = false;
+items[2].selected = true;
+const payloadWithVerdict = api.buildReviewPayload(bundle, items);
+assert.equal(payloadWithVerdict.labels['Code-Review'], -1);
+assert.equal(payloadWithVerdict.message.includes('**Verdict:**'), true);
+assert.equal(api.canSubmit({bundle, submitting: false}, 1), true);
+assert.equal(api.canSubmit({bundle, submitting: true}, 1), false);
+assert.equal(api.canSubmit({bundle: null, submitting: false}, 1), false);
+assert.equal(api.canSubmit({bundle, submitting: false}, 0), false);
+
+api.configure({labels: {'Needs changes': {'AI-Review': -1}}});
+const configuredBundle = JSON.parse(JSON.stringify(bundle));
+configuredBundle.reviews[0].labels = {};
+const configuredItems = api.flattenBundleItems(configuredBundle, {}, []);
+configuredItems.forEach(item => {
+  item.selected = item.kind === 'verdict';
+});
+const configuredPayload = api.buildReviewPayload(
+  configuredBundle,
+  configuredItems
+);
+assert.equal(configuredPayload.labels['AI-Review'], -1);
+api.configure({labels: {}});
+
+const currentRevisionState = {
+  api: {
+    getJson: async path => {
+      assert.equal(
+        path,
+        '/changes/123?o=CURRENT_REVISION&o=ALL_REVISIONS'
+      );
+      return {
+        current_revision: bundle.commit,
+        revisions: {[bundle.commit]: {_number: 3}},
+      };
+    },
+  },
+  changeNumber: '123',
+  patchset: null,
+  revision: '',
+};
+const staleRevision = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const staleRevisionState = {
+  api: {
+    getJson: async () => ({
+      current_revision: staleRevision,
+      revisions: {[staleRevision]: {_number: 4}},
+    }),
+  },
+  changeNumber: '123',
+  patchset: null,
+  revision: bundle.commit,
+};
+
+api.fetchCurrentRevision(currentRevisionState, bundle)
+  .then(revision => {
+    assert.equal(revision, bundle.commit);
+    assert.equal(currentRevisionState.revision, bundle.commit);
+    return assert.rejects(
+      () => api.fetchCurrentRevision(staleRevisionState, bundle),
+      /not current Gerrit revision/
+    );
+  })
+  .then(() => {
+    console.log('Gerrit browser upload tests ok');
+  })
+  .catch(error => {
+    console.error(error);
+    process.exit(1);
+  });
+EOF_NODE

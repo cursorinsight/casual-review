@@ -150,7 +150,7 @@ run_codex() {
   # codex prints "model: ..." / "reasoning effort: ..." to stderr at startup;
   # capture it to recover the real values even when neither was overridden.
   local err_tmp status=0
-  err_tmp=$(mktemp)
+  err_tmp=$(mktemp) || return 1
   "$bin" exec --ephemeral --sandbox read-only -C "$REPO_ROOT" \
     "${ENGINE_MODEL_ARGS[@]}" \
     "${ENGINE_EFFORT_ARGS[@]}" \
@@ -173,8 +173,8 @@ run_claude() {
   build_engine_arg_arrays claude
   # --output-format json exposes modelUsage, letting us recover the real
   # model even when it wasn't overridden; it does not expose effort.
-  local json_tmp status=0
-  json_tmp=$(mktemp)
+  local json_tmp output_tmp resolved status=0
+  json_tmp=$(mktemp) || return 1
   (
     cd "$REPO_ROOT"
     "$bin" -p --no-session-persistence --permission-mode dontAsk \
@@ -189,12 +189,27 @@ run_claude() {
       <"$prompt" >"$json_tmp"
   ) || status=$?
   if ((status == 0)); then
-    jq -r '.result' "$json_tmp" >"$output"
-    local resolved
-    resolved=$(jq -r '.modelUsage | to_entries | if length > 0 then (max_by(.value.outputTokens) | .key) else empty end' "$json_tmp" 2>/dev/null)
+    output_tmp=$(mktemp "$output.tmp.XXXXXX") || status=1
+  fi
+  if ((status == 0)); then
+    replace_file_from_command "$output" "$output_tmp" \
+      jq -r '.result' "$json_tmp" || status=1
+  fi
+  if ((status == 0)); then
+    resolved=$(
+      jq -r '
+        .modelUsage
+        | to_entries
+        | if length > 0
+          then (max_by(.value.outputTokens) | .key)
+          else empty
+          end
+      ' "$json_tmp" 2>/dev/null
+    )
     [[ -z "$resolved" ]] || CLAUDE_MODEL_RESOLVED=$resolved
   fi
   rm -f "$json_tmp"
+  [[ -z "${output_tmp:-}" ]] || rm -f "$output_tmp"
   return "$status"
 }
 
@@ -240,10 +255,13 @@ for commit in "${COMMITS[@]}"; do
   for engine in "${engines[@]}"; do
     dir="$OUTPUT_DIR/$engine"; mkdir -p "$dir"
     output="$dir/$(printf '%03d' "$n")-$short.md"
-    tmp=$(mktemp)
+    tmp=$(mktemp) || exit 1
     trap 'rm -f "$tmp"' EXIT
-    sed -e "s/{{COMMIT}}/$commit/g" -e "s/{{PARENT}}/$parent/g" \
-        -e "s/{{SUBJECT}}/$safe_subject/g" "$PROMPT_FILE" >"$tmp"
+    write_file_from_command "$tmp" \
+      sed -e "s/{{COMMIT}}/$commit/g" \
+        -e "s/{{PARENT}}/$parent/g" \
+        -e "s/{{SUBJECT}}/$safe_subject/g" \
+        "$PROMPT_FILE"
     printf '[%d/%d] %-11s %s %s\n' \
       "$n" "${#COMMITS[@]}" "$engine" "$short" "$subject"
     if run_engine "$engine" "$tmp" "$output"; then result=OK; else
@@ -296,8 +314,9 @@ make_summary() {
     [[ "$ENGINE" == all ]] && engine=codex || engine=$ENGINE
   fi
   local tmp
-  tmp=$(mktemp)
-  sed "s|{{REVIEW_DIR}}|$OUTPUT_DIR|g" "$SUMMARY_PROMPT" >"$tmp"
+  tmp=$(mktemp) || return 1
+  write_file_from_command "$tmp" \
+    sed "s|{{REVIEW_DIR}}|$OUTPUT_DIR|g" "$SUMMARY_PROMPT" || return 1
   if run_engine "$engine" "$tmp" "$OUTPUT_DIR/SUMMARY.md"; then
     printf '\n---\n_Engine: %s · Model: %s · Effort: %s_\n' \
       "$engine" \
