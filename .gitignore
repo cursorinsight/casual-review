@@ -1,2 +1,6 @@
 /browser/upload-gerrit-reviews.user.js
 /browser/casual-review-upload.js
+/node_modules/
+/playwright/.auth/
+/playwright/playwright-report/
+/playwright/test-results/

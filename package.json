@@ -1,0 +1,10 @@
+{
+  "name": "casual-review",
+  "private": true,
+  "scripts": {
+    "test:gerrit-browser": "playwright test -c playwright/playwright.config.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

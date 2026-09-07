@@ -35,16 +35,7 @@ LABELS_JSON='{"Needs changes":{"AI-Review":-1}}'
 grep -q 'GERRIT_LABELS_JSON is undefined' "$tmp/missing-labels.log" ||
   die "missing undefined GERRIT_LABELS_JSON warning"
 
-if GERRIT_URL=example.com \
-  GERRIT_LABELS_JSON="$LABELS_JSON" \
-  USER_SCRIPT="$tmp/bad-url.user.js" \
-  make userscript >/dev/null 2>"$tmp/bad-url.log"; then
-  die "userscript accepted GERRIT_URL without scheme"
-fi
-grep -q 'GERRIT_URL must include scheme' "$tmp/bad-url.log" ||
-  die "missing bad GERRIT_URL error"
-
-GERRIT_URL=https://example.com/r \
+GERRIT_URL=https://example.com/r/ \
   GERRIT_LABELS_JSON="$LABELS_JSON" \
   make browser-artifacts >/dev/null
 

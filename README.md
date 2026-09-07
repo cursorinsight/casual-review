@@ -178,15 +178,15 @@ For personal browser use, generate the Tampermonkey userscript for your Gerrit
 URL and install it in [Tampermonkey](https://www.tampermonkey.net/):
 
 ```bash
-GERRIT_URL=https://gerrit.example.com/r \
-GERRIT_LABELS_JSON="$GERRIT_LABELS_JSON" \
-make userscript
+make userscript \
+    GERRIT_URL=https://gerrit.example.com/r \
+    GERRIT_LABELS_JSON="$GERRIT_LABELS_JSON"
 ```
 
-Without `GERRIT_URL`, `make userscript` prompts for the URL. The target writes
-`browser/upload-gerrit-reviews.user.js` with a userscript `@match` line such
-as `https://gerrit.example.com/r/c/*`, preserving the scheme and base path.
-`GERRIT_URL` must include the scheme, such as `https://`.
+`GERRIT_URL` is required. The target writes
+`browser/upload-gerrit-reviews.user.js` with a userscript `@match` line such as
+`https://gerrit.example.com/r/c/*`, preserving the scheme and base path. The
+URL must include the scheme, such as `https://`.
 Open the matching Gerrit change page, click `Upload AI review`, load the
 matching `.json.gz` file, select or unselect items, then submit. The browser
 uploader uses the existing Gerrit web session and XSRF cookie; it does not need
@@ -200,7 +200,7 @@ Use either the userscript or the plugin, not both. As a server-wide
 alternative, generate and install the standalone Gerrit JavaScript plugin:
 
 ```bash
-GERRIT_LABELS_JSON="$GERRIT_LABELS_JSON" make gerrit-plugin
+ make gerrit-plugin GERRIT_LABELS_JSON="$GERRIT_LABELS_JSON"
 cp browser/casual-review-upload.js "$GERRIT_SITE/plugins/"
 ```
 
@@ -210,6 +210,44 @@ not need a Tampermonkey `@match` host and uses the same browser session as the
 userscript. See Gerrit's JavaScript plugin documentation for standalone plugin
 loading details:
 <https://gerrit-review.googlesource.com/Documentation/pg-plugin-dev.html>
+
+#### Gerrit Browser Test
+
+The Playwright test exercises the installed plugin against Gerrit staging. It
+creates a work-in-progress change in an existing test project, submits a
+selected inline comment and verdict, verifies Gerrit's stored comments,
+message, and label vote, checks duplicate and stale-patch-set handling, then
+abandons the change. Set `GERRIT_TEST_PROJECT` to a project where the test
+account can create changes.
+
+Install the pinned test dependency and Chromium once:
+
+```bash
+make install-deps
+```
+
+Authenticate with a saved browser session. The state file contains credentials
+and is ignored by Git:
+
+```bash
+make login GERRIT_URL=https://gerrit.example.com/r
+```
+
+Sign in, close the browser, then run the destructive staging test explicitly:
+
+```bash
+make test-gerrit-browser \
+    GERRIT_URL=https://gerrit.example.com/r \
+    GERRIT_E2E_ALLOW_WRITES=1 \
+    GERRIT_IGNORE_HTTPS_ERRORS=1 \
+    GERRIT_TEST_PROJECT=project-name
+```
+
+`GERRIT_URL` and `GERRIT_TEST_PROJECT` are required. Override
+`GERRIT_STORAGE_STATE` when needed. As an alternative to saved state, set
+`GERRIT_USER` and the LDAP `GERRIT_PASSWORD`; the Gerrit HTTP password is not
+an LDAP login password. The test account must be able to create changes and
+vote `AI-Review` in the selected project.
 
 #### Generated Browser Artifacts
 
@@ -351,7 +389,7 @@ Upload a generated review directory with the same custom image:
 ```bash
 CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
     /path/to/casual-capsule/capsule.sh env \
-    GERRIT_URL=https://gerrit.example.com \
+    GERRIT_URL=https://gerrit.example.com/r \
     GERRIT_USER='<gerrit-user>' \
     GERRIT_HTTP_PASSWORD='<http-password-or-token>' \
     upload-gerrit-reviews --interactive
@@ -378,7 +416,7 @@ Respond to uploaded Gerrit review comments from a processed decision log:
 ```bash
 CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
     /path/to/casual-capsule/capsule.sh env \
-    GERRIT_URL=https://gerrit.example.com \
+    GERRIT_URL=https://gerrit.example.com/r \
     GERRIT_USER='<gerrit-user>' \
     GERRIT_HTTP_PASSWORD='<http-password-or-token>' \
     respond-gerrit-reviews --interactive

@@ -1,56 +1,73 @@
 CORE := browser/casual-review-upload-core.js
 USER_SCRIPT ?= browser/upload-gerrit-reviews.user.js
 GERRIT_PLUGIN ?= browser/casual-review-upload.js
+
 LABELS_JSON_NODE := const v=JSON.parse(process.env.GERRIT_LABELS_JSON);
 LABELS_JSON_NODE += if(!v||typeof v!=="object"||Array.isArray(v))
 LABELS_JSON_NODE += throw new Error("GERRIT_LABELS_JSON must be object");
 LABELS_JSON_NODE += process.stdout.write(JSON.stringify(v));
-GERRIT_MATCH_NODE := try{const u=new URL(process.env.GERRIT_URL);
-GERRIT_MATCH_NODE += const p=u.pathname.replace(/\/+$$/,"");
-GERRIT_MATCH_NODE += process.stdout.write(u.origin+p+"/c/*");}catch(e){
-GERRIT_MATCH_NODE += console.error("Error: GERRIT_URL must include scheme");
-GERRIT_MATCH_NODE += process.exit(1);}
 
-.PHONY: browser-artifacts browser-labels userscript gerrit-plugin
-.PHONY: check-browser-artifacts clean check test
+require = $(if $(strip $($(1))),,$(error $(1) is required))
 
+.PHONY: browser-artifacts
 browser-artifacts: userscript gerrit-plugin
 
+.PHONY: browser-labels
 browser-labels:
 	@if [ -z "$${GERRIT_LABELS_JSON:-}" ]; then \
 	  printf '%s\n' \
-	    'Warning: GERRIT_LABELS_JSON is undefined; browser labels disabled' \
-	    >&2; \
+		'Warning: GERRIT_LABELS_JSON is undefined; browser labels disabled' \
+		>&2; \
 	fi
 
+.PHONY: clean
 clean:
 	@rm -f -- "$(USER_SCRIPT)" "$(GERRIT_PLUGIN)"
 
+.PHONY: mrproper
+mrproper: clean
+	@rm -rf -- node_modules playwright/test-results \
+	  playwright/playwright-report playwright/.auth
+
+.PHONY: check
 check:
 	@./tests/check_all.sh
 
+.PHONY: test
 test:
 	@./tests/test_all.sh
 
-userscript: browser-labels
-	@mkdir -p "$(dir $(USER_SCRIPT))"
+.PHONY: install-deps
+install-deps:
+	@npm ci
+	@npx playwright install chromium
+
+.PHONY: login
+login:
+	$(call require,GERRIT_URL)
 	@gerrit_url="$(GERRIT_URL)"; \
-	if [ -z "$$gerrit_url" ]; then \
-	  if [ -t 0 ]; then \
-		printf 'Gerrit URL: ' >&2; \
-		IFS= read -r gerrit_url; \
-	  else \
-		printf '%s\n' 'Error: set GERRIT_URL for userscript' >&2; \
-		exit 1; \
-	  fi; \
-	fi; \
-	if [ -z "$$gerrit_url" ]; then \
-	  printf '%s\n' 'Error: Gerrit URL must not be empty' >&2; \
+	mkdir -p playwright/.auth; \
+	npx playwright codegen --ignore-https-errors \
+	  --save-storage=playwright/.auth/gerrit.json \
+	  "$${gerrit_url%/}/login/"
+
+.PHONY: test-gerrit-browser
+test-gerrit-browser:
+	$(call require,GERRIT_URL)
+	$(call require,GERRIT_TEST_PROJECT)
+	$(call require,GERRIT_E2E_ALLOW_WRITES)
+	@if [ "$(GERRIT_E2E_ALLOW_WRITES)" != 1 ]; then \
+	  printf '%s\n' \
+		'Error: GERRIT_E2E_ALLOW_WRITES must be 1' >&2; \
 	  exit 1; \
-	fi; \
-	match_url=$$(GERRIT_URL="$$gerrit_url" \
-	  node -e '$(GERRIT_MATCH_NODE)') || exit 1; \
-	labels_json="$${GERRIT_LABELS_JSON:-}"; \
+	fi
+	@npm run test:gerrit-browser
+
+.PHONY: userscript
+userscript: browser-labels
+	$(call require,GERRIT_URL)
+	@mkdir -p "$(dir $(USER_SCRIPT))"
+	@labels_json="$${GERRIT_LABELS_JSON:-}"; \
 	if [ -z "$$labels_json" ]; then labels_json='{}'; fi; \
 	labels_json=$$(GERRIT_LABELS_JSON="$$labels_json" \
 	  node -e '$(LABELS_JSON_NODE)') || exit 1; \
@@ -62,7 +79,8 @@ userscript: browser-labels
 	  printf '%s\n' '// @version      0.1.0'; \
 	  printf '%s\n' \
 		'// @description  Upload casual-review JSON bundles on Gerrit'; \
-	  printf '%s\n' "// @match        $${match_url}"; \
+	  printf '%s\n' \
+		'// @match        $(patsubst %/,%,$(GERRIT_URL))/c/*'; \
 	  printf '%s\n' '// @grant        none'; \
 	  printf '%s\n' '// @run-at       document-idle'; \
 	  printf '%s\n' '// ==/UserScript=='; \
@@ -78,6 +96,7 @@ userscript: browser-labels
 	  printf '%s\n' '}'; \
 	} >"$(USER_SCRIPT)"
 
+.PHONY: gerrit-plugin
 gerrit-plugin: browser-labels
 	@mkdir -p "$(dir $(GERRIT_PLUGIN))"
 	@labels_json="$${GERRIT_LABELS_JSON:-}"; \
@@ -104,6 +123,7 @@ gerrit-plugin: browser-labels
 		"})(typeof globalThis !== 'undefined' ? globalThis : this);"; \
 	} >"$(GERRIT_PLUGIN)"
 
+.PHONY: check-browser-artifacts
 check-browser-artifacts:
 	@tmp=$$(mktemp -d); \
 	trap 'rm -rf "$$tmp"' EXIT INT HUP TERM; \
