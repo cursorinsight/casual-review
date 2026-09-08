@@ -2,10 +2,8 @@ CORE := browser/casual-review-upload-core.js
 USER_SCRIPT ?= browser/upload-gerrit-reviews.user.js
 GERRIT_PLUGIN ?= browser/casual-review-upload.js
 
-LABELS_JSON_NODE := const v=JSON.parse(process.env.GERRIT_LABELS_JSON);
-LABELS_JSON_NODE += if(!v||typeof v!=="object"||Array.isArray(v))
-LABELS_JSON_NODE += throw new Error("GERRIT_LABELS_JSON must be object");
-LABELS_JSON_NODE += process.stdout.write(JSON.stringify(v));
+LABELS_JSON_JQ := if type == "object" then . else
+LABELS_JSON_JQ += error("GERRIT_LABELS_JSON must be an object") end
 
 require = $(if $(strip $($(1))),,$(error $(1) is required))
 
@@ -69,8 +67,8 @@ userscript: browser-labels
 	@mkdir -p "$(dir $(USER_SCRIPT))"
 	@labels_json="$${GERRIT_LABELS_JSON:-}"; \
 	if [ -z "$$labels_json" ]; then labels_json='{}'; fi; \
-	labels_json=$$(GERRIT_LABELS_JSON="$$labels_json" \
-	  node -e '$(LABELS_JSON_NODE)') || exit 1; \
+	labels_json=$$(printf '%s\n' "$$labels_json" | \
+	  jq -ce '$(LABELS_JSON_JQ)') || exit 1; \
 	{ \
 	  printf '%s\n' '// ==UserScript=='; \
 	  printf '%s\n' '// @name         Casual Review Gerrit Upload'; \
@@ -101,8 +99,8 @@ gerrit-plugin: browser-labels
 	@mkdir -p "$(dir $(GERRIT_PLUGIN))"
 	@labels_json="$${GERRIT_LABELS_JSON:-}"; \
 	if [ -z "$$labels_json" ]; then labels_json='{}'; fi; \
-	labels_json=$$(GERRIT_LABELS_JSON="$$labels_json" \
-	  node -e '$(LABELS_JSON_NODE)') || exit 1; \
+	labels_json=$$(printf '%s\n' "$$labels_json" | \
+	  jq -ce '$(LABELS_JSON_JQ)') || exit 1; \
 	{ \
 	  printf '%s\n' '/* global Gerrit */'; \
 	  sed -n '1,$$p' "$(CORE)"; \
