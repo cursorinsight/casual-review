@@ -1,4 +1,31 @@
-# `casual-review`
+# 🤖 Casual Review
+
+[![ci][ci-badge]][ci]
+[![License][license-badge]][license]
+[![Shell][shell-badge]][shell]
+[![Shellcheck][shellcheck-badge]][shellcheck]
+[![Tooling][mise-badge]][mise]
+
+A multi-engine generative AI assisted reviewer.
+
+## Table of contents
+
+- [Quick start](#-quick-start)
+- [Shell Completion](#%EF%B8%8F-shell-completion)
+- [Result layout](#-result-layout)
+- [Processing Review Feedback](#-processing-review-feedback)
+- [Uploading to Gerrit](#-uploading-to-gerrit)
+  - [Uploading Reviews](#uploading-reviews)
+  - [Uploading Responses](#uploading-responses)
+- [Uploading to GitHub](#-uploading-to-github)
+- [Authentication](#-authentication)
+- [Safety model](#%EF%B8%8F-safety-model)
+- [Configuration](#-configuration)
+- [Running inside Capsule](#-running-inside-capsule)
+- [Testing](#-testing)
+- [Notes](#-notes)
+
+## 🚀 Quick start
 
 `casual-review` is a multi-engine generative AI assisted reviewer, a
 read-oriented batch reviewer for a Git range, supporting:
@@ -12,8 +39,6 @@ It reviews every commit in `BASE..HEAD` without checking commits out. Each
 agent uses historical Git objects (`git diff`, `git show`) and writes one
 Markdown file per commit. An aggregate `SUMMARY.md` is generated after the
 individual reviews.
-
-## Quick start
 
 Extract this package, enter the repository to review, then run:
 
@@ -54,7 +79,7 @@ casual-review gerrit respond
 casual-review github upload
 ```
 
-## Shell Completion
+## ⌨️ Shell Completion
 
 `casual-review completion` generates native completion code. Regenerate it
 after updating `casual-review` so command and option lists stay current.
@@ -90,7 +115,7 @@ casual-review completion fish > \
   "$HOME/.config/fish/completions/casual-review.fish"
 ```
 
-## Result layout
+## 📂 Result layout
 
 ```text
 ai-reviews/
@@ -106,7 +131,7 @@ ai-reviews/
     └── ...
 ```
 
-## Processing Review Feedback
+## 🔄 Processing Review Feedback
 
 `prompts/process-reviews.md` is a single-shot agent prompt for processing
 generated review directories such as `ai-reviews/` or `reviews/`. Feed it to an
@@ -128,7 +153,7 @@ same `*_BIN`, `*_MODEL`, `*_EFFORT`, and `*_EXTRA_ARGS` environment overrides
 used by `casual-review review` are supported for the selected engine.
 Set `CASUAL_REVIEW_ENGINE` to choose the default engine without a flag.
 
-## Uploading to Gerrit
+## 📤 Uploading to Gerrit
 
 ### Uploading Reviews
 
@@ -334,7 +359,7 @@ The default review directory is `./ai-reviews`, and the default decisions file
 is `./ai-reviews/DECISIONS.md`. Pass a review directory to use its
 `DECISIONS.md`; pass both paths only when the decision log lives elsewhere.
 
-## Uploading to GitHub
+## 📤 Uploading to GitHub
 
 `casual-review github upload` submits generated findings as pull-request
 reviews through the GitHub CLI. Dry-run is the default and does not invoke
@@ -399,12 +424,12 @@ GitHub review creation and line-location constraints are documented in the
 Authentication behavior comes from
 [GitHub CLI](https://cli.github.com/manual/gh_help_environment).
 
-## Authentication
+## 🔑 Authentication
 
 Log in to each CLI normally before running the batch. The script reuses the
 credentials and configuration of the installed command.
 
-## Safety model
+## 🛡️ Safety model
 
 `casual-review review` is read-only: Codex is explicitly placed in a read-only
 sandbox, Claude is limited to read access and selected read-only Git command
@@ -415,7 +440,7 @@ agent from the repository under review, with Codex using a `workspace-write`
 sandbox by default and Antigravity using `accept-edits` mode. For stronger
 isolation, run review processing on a disposable clone or inside Capsule.
 
-## Configuration
+## 🔧 Configuration
 
 Model and reasoning-effort selection, via flags (single engine only) or
 per-engine environment variables (works with `--engine all` too):
@@ -493,7 +518,7 @@ Choose another engine for the aggregate summary:
 SUMMARY_ENGINE=claude casual-review review --engine all
 ```
 
-## Running inside Capsule
+## 💊 Running inside Capsule
 
 This project's `Dockerfile` and `compose.yml` plug into
 [Capsule](https://github.com/cursorinsight/casual-capsule)'s
@@ -560,7 +585,7 @@ alias review='CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
       casual-review review --engine codex'
 ```
 
-## Testing
+## 🧪 Testing
 
 Run local sanity tests with:
 
@@ -588,7 +613,7 @@ Remove generated browser artifacts with:
 make clean
 ```
 
-## Notes
+## 📝 Notes
 
 - Merge commits are compared with their first parent and trigger a warning.
 - The script deliberately performs static review only. Testing historical
@@ -596,3 +621,15 @@ make clean
 - `origin/master..HEAD` means commits reachable from `HEAD` but not from
   `origin/master`. Fetch first when the remote-tracking ref may be stale.
 - Running all three engines triples the number of model calls, plus one summary.
+
+
+[ci-badge]: ../../actions/workflows/ci.yml/badge.svg
+[ci]: ../../actions/workflows/ci.yml
+[license-badge]: https://img.shields.io/badge/license-Apache%202.0-blue
+[license]: LICENSE
+[mise-badge]: https://img.shields.io/badge/tools-mise-orange
+[mise]: https://mise.en.dev
+[shell-badge]: https://img.shields.io/badge/shell-bash-green?logo=gnu-bash
+[shell]: bin/casual-review
+[shellcheck-badge]: https://img.shields.io/badge/lint-shellcheck-yellow
+[shellcheck]: https://www.shellcheck.net
