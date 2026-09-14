@@ -5,9 +5,9 @@ ROOT_DIR="$(
   CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P
 )"
 
-# shellcheck source=../bin/common.sh
+# shellcheck source=../lib/casual-review/common.sh
 # shellcheck disable=SC1091
-source "$ROOT_DIR/bin/common.sh"
+source "$ROOT_DIR/lib/casual-review/common.sh"
 
 tmp=
 WARNINGS=0

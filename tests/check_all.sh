@@ -90,7 +90,14 @@ run_checked_linter() {
   fi
 }
 
-shellcheck_files=(bin/* tests/*.sh)
+shellcheck_files=(
+  bin/*
+  lib/casual-review/*.sh
+  libexec/casual-review/review
+  libexec/casual-review/process
+  libexec/casual-review/gerrit/*
+  tests/*.sh
+)
 hadolint_files=(Dockerfile)
 
 run_checked_linter \

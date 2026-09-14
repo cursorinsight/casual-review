@@ -18,7 +18,7 @@ individual reviews.
 Extract this package, enter the repository to review, then run:
 
 ```bash
-/path/to/casual-review/bin/review-commits \
+/path/to/casual-review/bin/casual-review review \
   --engine all \
   --base origin/master \
   --head HEAD \
@@ -28,19 +28,29 @@ Extract this package, enter the repository to review, then run:
 Start with three commits to tune output and cost:
 
 ```bash
-/path/to/casual-review/bin/review-commits \
+/path/to/casual-review/bin/casual-review review \
   --engine all --limit 3
 ```
 
 Single-engine examples:
 
 ```bash
-review-commits --engine codex
-review-commits --engine claude
-review-commits --engine antigravity
+casual-review review --engine codex
+casual-review review --engine claude
+casual-review review --engine antigravity
 ```
 
 Add the package's `bin` directory to `PATH` for the shorter form.
+
+The package exposes one public executable:
+
+```text
+casual-review review
+casual-review process
+casual-review gerrit export
+casual-review gerrit upload
+casual-review gerrit respond
+```
 
 ## Result layout
 
@@ -66,18 +76,19 @@ agent from the repository under review when you want to triage findings, apply
 accepted fixes, append decisions to `DECISIONS.md`, squash clean fix commits
 into their target commits, and audit the final branch delta.
 
-`process-reviews` launches one selected agent with that prompt and an explicit
-review directory:
+`casual-review process` launches one selected agent with that prompt and an
+explicit review directory:
 
 ```bash
-process-reviews --engine codex
-process-reviews --engine claude --reviews ./reviews
-process-reviews --engine antigravity ./ai-reviews
+casual-review process --engine codex
+casual-review process --engine claude --reviews ./reviews
+casual-review process --engine antigravity ./ai-reviews
 ```
 
 The default review directory is `ai-reviews`. `--model`, `--effort`, and the
 same `*_BIN`, `*_MODEL`, `*_EFFORT`, and `*_EXTRA_ARGS` environment overrides
-used by `review-commits` are supported for the selected engine.
+used by `casual-review review` are supported for the selected engine.
+Set `CASUAL_REVIEW_ENGINE` to choose the default engine without a flag.
 
 ## Uploading to Gerrit
 
@@ -85,16 +96,16 @@ used by `review-commits` are supported for the selected engine.
 
 #### CLI Uploads
 
-`upload-gerrit-reviews` reads a generated `ai-reviews` directory and uploads
-the per-commit findings to Gerrit with its REST API. It posts inline comments
-from each `Suggested Gerrit comment:` block and posts the review verdict as
-the change message.
+`casual-review gerrit upload` reads a generated `ai-reviews` directory and
+uploads the per-commit findings to Gerrit with its REST API. It posts inline
+comments from each `Suggested Gerrit comment:` block and posts the review
+verdict as the change message.
 
 Dry-run is the default and makes no HTTP requests:
 
 ```bash
-upload-gerrit-reviews
-upload-gerrit-reviews --dry-run
+casual-review gerrit upload
+casual-review gerrit upload --dry-run
 ```
 
 Posting modes require Gerrit connection settings in environment variables:
@@ -104,8 +115,8 @@ export GERRIT_URL=https://gerrit.example.com
 export GERRIT_USER="$USER"
 export GERRIT_HTTP_PASSWORD='<http-password-or-token>'
 
-upload-gerrit-reviews --interactive
-upload-gerrit-reviews --yolo
+casual-review gerrit upload --interactive
+casual-review gerrit upload --yolo
 ```
 
 When posting, the uploader passes credentials to `curl` through a temporary
@@ -130,7 +141,7 @@ constrain them:
 ```bash
 GERRIT_PROJECT=my/project \
 GERRIT_BRANCH=master \
-upload-gerrit-reviews --interactive
+casual-review gerrit upload --interactive
 ```
 
 The default review directory is `./ai-reviews`. Pass a path only when using a
@@ -166,7 +177,7 @@ labels already present in the uploaded bundle.
 For browser-based uploads, export one compressed JSON bundle per Gerrit change:
 
 ```bash
-export-gerrit-reviews --engine claude
+casual-review gerrit export --engine claude
 ```
 
 Bundles are written to `./ai-reviews/gerrit-browser-upload/` by default, using
@@ -200,7 +211,7 @@ Use either the userscript or the plugin, not both. As a server-wide
 alternative, generate and install the standalone Gerrit JavaScript plugin:
 
 ```bash
- make gerrit-plugin GERRIT_LABELS_JSON="$GERRIT_LABELS_JSON"
+make gerrit-plugin GERRIT_LABELS_JSON="$GERRIT_LABELS_JSON"
 cp browser/casual-review-upload.js "$GERRIT_SITE/plugins/"
 ```
 
@@ -258,10 +269,10 @@ artifacts are ignored by git.
 
 ### Uploading Responses
 
-`respond-gerrit-reviews` reads the generated review files and a
+`casual-review gerrit respond` reads the generated review files and a
 `DECISIONS.md` file in the format used by `prompts/process-reviews.md`, finds
-the already uploaded AI inline comments on Gerrit, and posts replies that
-record the chosen decision, fix commit, squash target, checks, and reasoning.
+the already uploaded AI inline comments on Gerrit, and posts replies recording
+the chosen decision, fix commit, squash target, checks, and reasoning.
 It maps decisions to uploaded inline comments by review-file order. Decisions
 for questions or other non-inline notes are posted as tagged Gerrit change
 messages with a stable decision key when that review file had inline comments.
@@ -272,9 +283,9 @@ Decision matching uses the decision title; `Reasoning` is posted as-is and
 should contain only the final rationale.
 
 ```bash
-respond-gerrit-reviews --dry-run
-respond-gerrit-reviews --interactive
-respond-gerrit-reviews --yolo
+casual-review gerrit respond --dry-run
+casual-review gerrit respond --interactive
+casual-review gerrit respond --yolo
 ```
 
 As with uploads, set `GERRIT_ALLOW_NON_CURRENT=1` to reply on old patch sets.
@@ -292,14 +303,14 @@ credentials and configuration of the installed command.
 
 ## Safety model
 
-`review-commits` is read-only: Codex is explicitly placed in a read-only
+`casual-review review` is read-only: Codex is explicitly placed in a read-only
 sandbox, Claude is limited to read access and selected read-only Git command
 patterns, and Antigravity is run in non-interactive print mode.
 
-`process-reviews` is intentionally not read-only. It starts an editing agent
-from the repository under review, with Codex using a `workspace-write` sandbox
-by default and Antigravity using `accept-edits` mode. For stronger isolation,
-run review processing on a disposable clone or inside Capsule.
+`casual-review process` is intentionally not read-only. It starts an editing
+agent from the repository under review, with Codex using a `workspace-write`
+sandbox by default and Antigravity using `accept-edits` mode. For stronger
+isolation, run review processing on a disposable clone or inside Capsule.
 
 ## Configuration
 
@@ -307,13 +318,21 @@ Model and reasoning-effort selection, via flags (single engine only) or
 per-engine environment variables (works with `--engine all` too):
 
 ```bash
-review-commits --engine claude --model claude-sonnet-5 --effort high
+CASUAL_REVIEW_ENGINE=claude casual-review review
 
-CODEX_MODEL='<model>' CODEX_EFFORT='<level>' review-commits --engine codex
-CLAUDE_MODEL='<model>' CLAUDE_EFFORT='<level>' review-commits --engine claude
+casual-review review --engine claude --model claude-sonnet-5 --effort high
+
+CODEX_MODEL='<model>' CODEX_EFFORT='<level>' \
+  casual-review review --engine codex
+CLAUDE_MODEL='<model>' CLAUDE_EFFORT='<level>' \
+  casual-review review --engine claude
 ANTIGRAVITY_MODEL='<model>' ANTIGRAVITY_EFFORT='<level>' \
-  review-commits --engine antigravity
+  casual-review review --engine antigravity
 ```
+
+`CASUAL_REVIEW_ENGINE` also supplies the default `--engine` filter for Gerrit
+export and upload commands. An explicit `--engine` always overrides it. Use
+`all` or leave the filter unset to include every engine.
 
 Valid effort levels are engine-specific (e.g. Claude accepts `low`, `medium`,
 `high`, `xhigh`, `max`; Antigravity accepts `low`, `medium`, `high`); the
@@ -340,7 +359,7 @@ instead of silently billing metered API credits. Pass `--use-credits` to allow
 metered billing instead:
 
 ```bash
-review-commits --engine claude --use-credits
+casual-review review --engine claude --use-credits
 ```
 
 Verified behavior: for Claude, this reliably switches billing away from the
@@ -356,9 +375,9 @@ behavior here is unverified.
 Extra CLI arguments:
 
 ```bash
-CODEX_EXTRA_ARGS='...' review-commits --engine codex
-CLAUDE_EXTRA_ARGS='--max-turns 20' review-commits --engine claude
-ANTIGRAVITY_EXTRA_ARGS='...' review-commits --engine antigravity
+CODEX_EXTRA_ARGS='...' casual-review review --engine codex
+CLAUDE_EXTRA_ARGS='--max-turns 20' casual-review review --engine claude
+ANTIGRAVITY_EXTRA_ARGS='...' casual-review review --engine antigravity
 ```
 
 Because extra arguments are split by the shell script on whitespace, use them
@@ -368,7 +387,7 @@ for simple flags only. For complex quoting, make a wrapper executable and point
 Choose another engine for the aggregate summary:
 
 ```bash
-SUMMARY_ENGINE=claude review-commits --engine all
+SUMMARY_ENGINE=claude casual-review review --engine all
 ```
 
 ## Running inside Capsule
@@ -380,7 +399,7 @@ checkout, no copying into the Capsule checkout required:
 
 ```bash
 CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
-    /path/to/casual-capsule/capsule.sh review-commits \
+    /path/to/casual-capsule/capsule.sh casual-review review \
     --engine claude --base origin/master --head HEAD
 ```
 
@@ -392,14 +411,14 @@ CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
     GERRIT_URL=https://gerrit.example.com/r \
     GERRIT_USER='<gerrit-user>' \
     GERRIT_HTTP_PASSWORD='<http-password-or-token>' \
-    upload-gerrit-reviews --interactive
+    casual-review gerrit upload --interactive
 ```
 
 Export browser-upload bundles from a generated review directory:
 
 ```bash
 CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
-    /path/to/casual-capsule/capsule.sh export-gerrit-reviews \
+    /path/to/casual-capsule/capsule.sh casual-review gerrit export \
     --engine claude
 ```
 
@@ -407,7 +426,7 @@ Process a generated review directory with the same custom image:
 
 ```bash
 CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
-    /path/to/casual-capsule/capsule.sh process-reviews \
+    /path/to/casual-capsule/capsule.sh casual-review process \
     --engine codex --reviews ./ai-reviews
 ```
 
@@ -419,14 +438,12 @@ CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
     GERRIT_URL=https://gerrit.example.com/r \
     GERRIT_USER='<gerrit-user>' \
     GERRIT_HTTP_PASSWORD='<http-password-or-token>' \
-    respond-gerrit-reviews --interactive
+    casual-review gerrit respond --interactive
 ```
 
-`--build-custom` layers this project's `bin/` and `prompts/` on top of the
-`casual-capsule-cli` base image and symlinks `review-commits`,
-`process-reviews`, `export-gerrit-reviews`, `upload-gerrit-reviews`, and
-`respond-gerrit-reviews` onto `PATH`. Rerun it after changing scripts under
-`bin/` or the prompt templates.
+`--build-custom` layers this project's CLI and prompts on top of the
+`casual-capsule-cli` base image and puts `casual-review` on `PATH`. Rerun it
+after changing files under `bin/`, `lib/`, `libexec/`, or `prompts/`.
 
 To run `casual-review` inside a capsule directly from the CLI, the following
 alias can come handy (applying Codex as the AI engine and `xhigh` reasoning
@@ -437,7 +454,7 @@ alias review='CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
       capsule env \
       CODEX_EFFORT=xhigh \
       CODEX_EXTRA_ARGS="--dangerously-bypass-approvals-and-sandbox" \
-      review-commits --engine codex'
+      casual-review review --engine codex'
 ```
 
 ## Testing

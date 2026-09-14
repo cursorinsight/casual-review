@@ -411,10 +411,10 @@
     }
 
     status.appendChild(document.createTextNode(
-      'Load a .json.gz bundle exported with export-gerrit-reviews for this '
+      'Load a .json.gz bundle exported with casual-review gerrit export '
     ));
     status.appendChild(document.createTextNode(
-      'Gerrit change and current patch set. Select the review items to keep, '
+      'for this Gerrit change and current patch set. Select items to keep, '
     ));
     status.appendChild(document.createTextNode(
       'then submit them through your '

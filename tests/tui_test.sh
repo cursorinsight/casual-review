@@ -6,8 +6,8 @@ ROOT_DIR="$(
   CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P
 )"
 
-# shellcheck source=../bin/tui.sh
-source "$ROOT_DIR/bin/tui.sh"
+# shellcheck source=../lib/casual-review/tui.sh
+source "$ROOT_DIR/lib/casual-review/tui.sh"
 
 tmp=
 
@@ -100,7 +100,7 @@ grep -q '<yellow><b>WARNING: careful' "$status_output" ||
 if script_supports_qec "$tmp/script-probe.out"; then
   cat >"$tmp/confirm.sh" <<'EOF_CONFIRM'
 set -Eeuo pipefail
-source "$ROOT_DIR/bin/tui.sh"
+source "$ROOT_DIR/lib/casual-review/tui.sh"
 TUI_RESET=
 TUI_BOLD='<b>'
 TUI_RED='<red>'

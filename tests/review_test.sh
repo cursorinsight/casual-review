@@ -48,24 +48,24 @@ chmod +x "$fake_claude"
 
 if (
     cd "$repo"
+    CASUAL_REVIEW_ENGINE=claude \
     CLAUDE_BIN="$fake_claude" \
-      "$ROOT_DIR/bin/review-commits" \
-      --engine claude \
+"$ROOT_DIR/bin/casual-review" review \
       --base HEAD~1 \
       --head HEAD \
       --output "$out" \
       --skip-summary
   ) >/dev/null 2>"$log";
 then
-  die "review-commits accepted invalid Claude JSON"
+  die "review accepted invalid Claude JSON"
 fi
 
 review_file=$(find "$out/claude" -type f -name '001-*.md' | sed -n '1p')
 [[ -n "$review_file" ]] ||
-  die "review-commits test: failure review file missing"
+  die "review test: failure review file missing"
 grep -q '^# Review failed$' "$review_file" ||
-  die "review-commits test: failure marker missing"
+  die "review test: failure marker missing"
 grep -q '{invalid' "$review_file" &&
-  die "review-commits test: invalid JSON leaked into review file"
+  die "review test: invalid JSON leaked into review file"
 
-printf 'review-commits test ok\n'
+printf 'review test ok\n'

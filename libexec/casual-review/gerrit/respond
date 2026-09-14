@@ -4,7 +4,7 @@ set -Eeuo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  respond-gerrit-reviews [options] [AI_REVIEWS_DIR [DECISIONS_MD]]
+  casual-review gerrit respond [options] [AI_REVIEWS_DIR [DECISIONS_MD]]
 
 Options:
   --dry-run        parse and print what would be posted; no HTTP (default)
@@ -39,25 +39,18 @@ Default arguments:
 USAGE
 }
 
-SCRIPT_PATH=${BASH_SOURCE[0]}
-while [[ -L "$SCRIPT_PATH" ]]; do
-  SCRIPT_DIR=$(
-    CDPATH='' cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P
-  )
-  SCRIPT_PATH=$(readlink "$SCRIPT_PATH")
-  [[ "$SCRIPT_PATH" == /* ]] || SCRIPT_PATH=$SCRIPT_DIR/$SCRIPT_PATH
-done
-SCRIPT_DIR=$(
-  CDPATH='' cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P
-)
+[[ -n "${CASUAL_REVIEW_ROOT:-}" ]] || {
+  printf 'Error: run this command through casual-review\n' >&2
+  exit 1
+}
 
-# shellcheck source=bin/common.sh
+# shellcheck source=lib/casual-review/common.sh
 # shellcheck disable=SC1091
-source "$SCRIPT_DIR/common.sh"
+source "$CASUAL_REVIEW_ROOT/lib/casual-review/common.sh"
 
-# shellcheck source=bin/tui.sh
+# shellcheck source=lib/casual-review/tui.sh
 # shellcheck disable=SC1091
-source "$SCRIPT_DIR/tui.sh"
+source "$CASUAL_REVIEW_ROOT/lib/casual-review/tui.sh"
 
 warn() {
   WARNINGS=$((WARNINGS + 1))
@@ -97,20 +90,12 @@ INTERACTIVE_TOTAL=0
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 while (($#)); do
   case "$1" in
-    --dry-run)
-      MODE=dry-run
-      shift
-      ;;
-    --interactive)
-      MODE=interactive
-      shift
-      ;;
-    --yolo)
-      MODE=yolo
+    --dry-run|--interactive|--yolo)
+      MODE=$(cli_mode "$1")
       shift
       ;;
     --limit)
-      [[ $# -ge 2 ]] || die "--limit needs a value"
+      cli_require_value "$1" "${2-}" "$#"
       LIMIT=$2
       shift 2
       ;;
@@ -136,7 +121,7 @@ while (($#)); do
   esac
 done
 
-[[ "$LIMIT" =~ ^[0-9]+$ ]] || die "--limit must be a non-negative integer"
+cli_validate_limit "$LIMIT"
 fi
 
 DECISION_TITLES=()

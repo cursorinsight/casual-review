@@ -4,6 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(
   CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P
 )"
+export CASUAL_REVIEW_ROOT=$ROOT_DIR
 
 cd "$ROOT_DIR"
 
@@ -67,9 +68,12 @@ reviews=$tmp/ai-reviews
 out=$tmp/out
 commit=0123456789abcdef0123456789abcdef01234567
 write_review "$reviews/codex/001-0123456789ab.md" "$commit" "Validate input"
+write_review "$reviews/claude/001-0123456789ab.md" "$commit" "Validate input"
 
+CASUAL_REVIEW_ENGINE=missing \
 GERRIT_LABELS_JSON='{"Needs changes":{"Code-Review":-1}}' \
-  bin/export-gerrit-reviews --output "$out" --engine codex "$reviews" \
+bin/casual-review gerrit export \
+  --output "$out" --engine codex "$reviews" \
   >/dev/null
 
 bundle=$out/0123456.json.gz
@@ -94,10 +98,36 @@ jq -e '
   and (.reviews[0].message | contains("**Verdict:** Needs changes"))
 ' >/dev/null "$decoded" || die "export test: bundle JSON failed"
 
+env_out=$tmp/env-out
+CASUAL_REVIEW_ENGINE=codex \
+  bin/casual-review gerrit export --output "$env_out" "$reviews" \
+  >/dev/null
+gzip -dc "$env_out/0123456.json.gz" |
+  jq -e '
+    .summary.review_count == 1
+    and .reviews[0].engine == "codex"
+  ' >/dev/null || die "export test: environment engine filter failed"
+
+all_out=$tmp/all-out
+CASUAL_REVIEW_ENGINE=missing \
+  bin/casual-review gerrit export \
+    --output "$all_out" --engine all "$reviews" >/dev/null
+gzip -dc "$all_out/0123456.json.gz" |
+  jq -e '.summary.review_count == 2' >/dev/null ||
+  die "export test: CLI all-engine filter failed"
+
+env_all_out=$tmp/env-all-out
+CASUAL_REVIEW_ENGINE=all \
+  bin/casual-review gerrit export \
+    --output "$env_all_out" "$reviews" >/dev/null
+gzip -dc "$env_all_out/0123456.json.gz" |
+  jq -e '.summary.review_count == 2' >/dev/null ||
+  die "export test: environment all-engine filter failed"
+
 (
-  # shellcheck source=../bin/export-gerrit-reviews
+  # shellcheck source=../libexec/casual-review/gerrit/export
   # shellcheck disable=SC1091
-  source "$ROOT_DIR/bin/export-gerrit-reviews"
+  source "$ROOT_DIR/libexec/casual-review/gerrit/export"
 
   TMP_DIR=$tmp/append-failure
   mkdir -p "$TMP_DIR"
@@ -115,9 +145,9 @@ jq -e '
 )
 
 (
-  # shellcheck source=../bin/export-gerrit-reviews
+  # shellcheck source=../libexec/casual-review/gerrit/export
   # shellcheck disable=SC1091
-  source "$ROOT_DIR/bin/export-gerrit-reviews"
+  source "$ROOT_DIR/libexec/casual-review/gerrit/export"
 
   TMP_DIR=$tmp/create-failure
   mkdir -p "$TMP_DIR"
@@ -136,9 +166,9 @@ jq -e '
 )
 
 (
-  # shellcheck source=../bin/export-gerrit-reviews
+  # shellcheck source=../libexec/casual-review/gerrit/export
   # shellcheck disable=SC1091
-  source "$ROOT_DIR/bin/export-gerrit-reviews"
+  source "$ROOT_DIR/libexec/casual-review/gerrit/export"
 
   TMP_DIR=$tmp/write-failure
   OUTPUT_DIR=$tmp/write-out
@@ -163,34 +193,41 @@ jq -e '
 )
 
 (
+  # shellcheck disable=SC2031
   cd "$tmp"
-  "$ROOT_DIR/bin/export-gerrit-reviews" --engine codex >/dev/null
+"$ROOT_DIR/bin/casual-review" gerrit export --engine codex >/dev/null
 ) || die "export test: default review directory failed"
 [[ -f "$reviews/gerrit-browser-upload/0123456.json.gz" ]] ||
   die "export test: default output bundle missing"
 if (
+  # shellcheck disable=SC2031
   cd "$tmp"
-  "$ROOT_DIR/bin/export-gerrit-reviews" --engine codex "" >/dev/null 2>&1
+"$ROOT_DIR/bin/casual-review" gerrit export \
+  --engine codex "" >/dev/null 2>&1
 ); then
   die "export test: explicit empty review directory accepted"
 fi
 
+# shellcheck disable=SC2031
 limit_out=$tmp/limit-out
 write_review \
   "$reviews/codex/002-aaaaaaaaaaaa.md" \
   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   "Second review"
-bin/export-gerrit-reviews --output "$limit_out" --limit 1 "$reviews" \
+bin/casual-review gerrit export \
+  --output "$limit_out" --limit 1 "$reviews" \
   >/dev/null
 [[ -f "$limit_out/0123456.json.gz" ]] ||
   die "export test: limited first bundle missing"
 [[ ! -e "$limit_out/aaaaaaa.json.gz" ]] ||
   die "export test: --limit exported too many bundles"
 
-if bin/export-gerrit-reviews --limit bad "$reviews" >/dev/null 2>&1; then
+if bin/casual-review gerrit export \
+  --limit bad "$reviews" >/dev/null 2>&1; then
   die "export test: invalid limit accepted"
 fi
 
+# shellcheck disable=SC2031
 collision=$tmp/collision
 write_review \
   "$collision/codex/001-012345600000.md" \
@@ -200,8 +237,8 @@ write_review \
   "$collision/codex/002-0123456fffff.md" \
   0123456fffffffffffffffffffffffffffffffff \
   "Second collision"
-if bin/export-gerrit-reviews "$collision" >/dev/null 2>&1; then
+if bin/casual-review gerrit export "$collision" >/dev/null 2>&1; then
   die "export test: short commit collision accepted"
 fi
 
-printf 'export-gerrit-reviews test ok\n'
+printf 'Gerrit export test ok\n'

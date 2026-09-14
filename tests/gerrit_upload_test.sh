@@ -5,9 +5,13 @@ ROOT_DIR="$(
   CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P
 )"
 
-# shellcheck source=../bin/upload-gerrit-reviews
+export CASUAL_REVIEW_ROOT=$ROOT_DIR
+export CASUAL_REVIEW_ENGINE=codex
+# shellcheck source=../libexec/casual-review/gerrit/upload
 # shellcheck disable=SC1091
-source "$ROOT_DIR/bin/upload-gerrit-reviews"
+source "$ROOT_DIR/libexec/casual-review/gerrit/upload"
+[[ "$ENGINE_FILTER" == codex ]] ||
+  die "upload test: environment engine filter was not initialized"
 
 tmp=
 
@@ -78,6 +82,10 @@ Needs changes
 The missing validation is a trust-boundary issue.
 EOF_REVIEW
 
+claude_dir=$tmp/ai-reviews/claude
+mkdir -p "$claude_dir"
+cp "$file" "$claude_dir/001-0123456789ab.md"
+
 parse_review_file "$file"
 [[ "$REVIEW_COMMIT" == 0123456789abcdef0123456789abcdef01234567 ]] ||
   die "upload test: commit parse failed"
@@ -99,11 +107,31 @@ parse_review_file "$file"
 
 (
   cd "$tmp"
-  "$ROOT_DIR/bin/upload-gerrit-reviews" --dry-run >/dev/null
+CASUAL_REVIEW_ENGINE=codex \
+  "$ROOT_DIR/bin/casual-review" gerrit upload --dry-run >/dev/null
 ) || die "upload test: default review directory failed"
+CASUAL_REVIEW_ENGINE=missing \
+  "$ROOT_DIR/bin/casual-review" gerrit upload \
+    --engine codex --dry-run "$tmp/ai-reviews" >/dev/null ||
+  die "upload test: CLI engine did not override environment"
+all_output=$(
+  CASUAL_REVIEW_ENGINE=missing \
+    "$ROOT_DIR/bin/casual-review" gerrit upload \
+      --engine all --dry-run "$tmp/ai-reviews"
+)
+[[ "$all_output" == *"Dry-run payloads: 2"* ]] ||
+  die "upload test: CLI all-engine filter failed"
+env_all_output=$(
+  CASUAL_REVIEW_ENGINE=all \
+    "$ROOT_DIR/bin/casual-review" gerrit upload \
+      --dry-run "$tmp/ai-reviews"
+)
+[[ "$env_all_output" == *"Dry-run payloads: 2"* ]] ||
+  die "upload test: environment all-engine filter failed"
 if (
   cd "$tmp"
-  "$ROOT_DIR/bin/upload-gerrit-reviews" --dry-run "" >/dev/null 2>&1
+"$ROOT_DIR/bin/casual-review" gerrit upload \
+  --dry-run "" >/dev/null 2>&1
 ); then
   die "upload test: explicit empty review directory accepted"
 fi
@@ -186,4 +214,4 @@ GERRIT_CONNECT_TIMEOUT=3 GERRIT_MAX_TIME=4 validate_curl_timeouts
   die "upload test: invalid max-time accepted"
 unset GERRIT_CONNECT_TIMEOUT GERRIT_MAX_TIME
 
-printf 'upload-gerrit-reviews test ok\n'
+printf 'Gerrit upload test ok\n'

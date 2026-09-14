@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  casual-review <command> [options]
+
+Commands:
+  review             review commits with an AI engine
+  process            process generated review findings
+  gerrit <command>   export, upload, or respond to Gerrit reviews
+
+Run 'casual-review <command> --help' for command-specific help.
+USAGE
+}
+
+gerrit_usage() {
+  cat <<'USAGE'
+Usage:
+  casual-review gerrit <command> [options]
+
+Commands:
+  export    export compressed browser upload bundles
+  upload    upload generated reviews through the Gerrit REST API
+  respond   respond to uploaded Gerrit comments from a decision log
+
+Run 'casual-review gerrit <command> --help' for command-specific help.
+USAGE
+}
+
+die_with_usage() {
+  local message=$1
+  local usage_function=$2
+
+  printf 'Error: %s\n\n' "$message" >&2
+  "$usage_function" >&2
+  exit 2
+}
+
+script_path=${BASH_SOURCE[0]}
+while [[ -L "$script_path" ]]; do
+  script_dir=$(
+    CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd -P
+  )
+  script_path=$(readlink "$script_path")
+  [[ "$script_path" == /* ]] || script_path=$script_dir/$script_path
+done
+script_dir=$(
+  CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd -P
+)
+CASUAL_REVIEW_ROOT=$(CDPATH='' cd -- "$script_dir/.." && pwd -P)
+export CASUAL_REVIEW_ROOT
+
+run_leaf() {
+  local leaf=$1
+  local path=$CASUAL_REVIEW_ROOT/libexec/casual-review/$leaf
+
+  shift
+  [[ -x "$path" ]] || {
+    printf 'Error: command implementation is not executable: %s\n' \
+      "$path" >&2
+    exit 1
+  }
+  exec "$path" "$@"
+}
+
+case "${1-}" in
+  review|process)
+    leaf=$1
+    shift
+    run_leaf "$leaf" "$@"
+    ;;
+  gerrit)
+    shift
+    case "${1-}" in
+      export|upload|respond)
+        leaf=$1
+        shift
+        run_leaf "gerrit/$leaf" "$@"
+        ;;
+      -h|--help)
+        gerrit_usage
+        ;;
+      '')
+        die_with_usage "Gerrit command is required" gerrit_usage
+        ;;
+      *)
+        die_with_usage "unknown Gerrit command: $1" gerrit_usage
+        ;;
+    esac
+    ;;
+  -h|--help)
+    usage
+    ;;
+  '')
+    die_with_usage "command is required" usage
+    ;;
+  *)
+    die_with_usage "unknown command: $1" usage
+    ;;
+esac
