@@ -5,9 +5,10 @@ ROOT_DIR="$(
   CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P
 )"
 
-# shellcheck source=../bin/respond-gerrit-reviews
+export CASUAL_REVIEW_ROOT=$ROOT_DIR
+# shellcheck source=../libexec/casual-review/gerrit/respond
 # shellcheck disable=SC1091
-source "$ROOT_DIR/bin/respond-gerrit-reviews"
+source "$ROOT_DIR/libexec/casual-review/gerrit/respond"
 
 tmp=
 
@@ -138,17 +139,18 @@ mkdir -p "$tmp/ai-reviews"
 cp -- "$decisions" "$tmp/ai-reviews/DECISIONS.md"
 (
   cd "$tmp"
-  "$ROOT_DIR/bin/respond-gerrit-reviews" --dry-run >/dev/null 2>&1
+"$ROOT_DIR/bin/casual-review" gerrit respond --dry-run >/dev/null 2>&1
 ) || die "respond test: default review and decisions paths failed"
 if (
   cd "$tmp"
-  "$ROOT_DIR/bin/respond-gerrit-reviews" --dry-run "" >/dev/null 2>&1
+"$ROOT_DIR/bin/casual-review" gerrit respond \
+  --dry-run "" >/dev/null 2>&1
 ); then
   die "respond test: explicit empty review directory accepted"
 fi
 if (
   cd "$tmp"
-  "$ROOT_DIR/bin/respond-gerrit-reviews" \
+"$ROOT_DIR/bin/casual-review" gerrit respond \
     --dry-run ai-reviews "" >/dev/null 2>&1
 ); then
   die "respond test: explicit empty decisions file accepted"
@@ -405,4 +407,4 @@ process_decision 4 >/dev/null 2>/dev/null ||
 [[ "$SKIPPED_DECISIONS" == 1 ]] ||
   die "respond test: mismatched commit not skipped"
 
-printf 'respond-gerrit-reviews test ok\n'
+printf 'Gerrit respond test ok\n'

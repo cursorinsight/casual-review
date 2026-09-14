@@ -37,7 +37,7 @@ run_process() {
   local log=$2
 
   shift 2
-  MOCK_LOG=$log "$@" bin/process-reviews \
+  MOCK_LOG=$log "$@" bin/casual-review process \
     --engine "$engine" \
     --reviews "$tmp/reviews" \
     --prompt "$tmp/process-prompt.md" >/dev/null
@@ -59,18 +59,19 @@ done
 EOF_MOCK
 chmod 755 "$tmp/mock-engine"
 
-bin/process-reviews --help >/dev/null ||
+bin/casual-review process --help >/dev/null ||
   die "process test: help failed"
-if bin/process-reviews --engine >/dev/null 2>&1; then
+if bin/casual-review process --engine >/dev/null 2>&1; then
   die "process test: --engine without value succeeded"
 fi
-if bin/process-reviews --unknown >/dev/null 2>&1; then
+if bin/casual-review process --unknown >/dev/null 2>&1; then
   die "process test: unknown option succeeded"
 fi
 
 codex_log=$tmp/codex.log
 run_process codex "$codex_log" \
   env \
+  CASUAL_REVIEW_ENGINE=claude \
   CODEX_BIN="$tmp/mock-engine" \
   CODEX_MODEL=codex-model \
   CODEX_EFFORT=xhigh \
@@ -89,12 +90,15 @@ assert_grep "Review directory: \`$tmp/reviews\`" "$codex_log" \
 assert_grep "Process review prompt body." "$codex_log" "codex prompt body"
 
 claude_log=$tmp/claude.log
-run_process claude "$claude_log" \
-  env \
+MOCK_LOG=$claude_log \
+  CASUAL_REVIEW_ENGINE=claude \
   CLAUDE_BIN="$tmp/mock-engine" \
   CLAUDE_MODEL=claude-model \
   CLAUDE_EFFORT=high \
-  CLAUDE_EXTRA_ARGS='--extra value'
+  CLAUDE_EXTRA_ARGS='--extra value' \
+  bin/casual-review process \
+    --reviews "$tmp/reviews" \
+    --prompt "$tmp/process-prompt.md" >/dev/null
 assert_grep "PWD=$ROOT_DIR" "$claude_log" "claude working directory"
 assert_grep "ARG[000]=--model" "$claude_log" "claude model flag"
 assert_grep "ARG[001]=claude-model" "$claude_log" "claude model"
@@ -126,4 +130,4 @@ assert_grep "ARG[009]=--dangerously-skip-permissions" "$antigravity_log" \
 assert_grep "Review directory: \`$tmp/reviews\`" "$antigravity_log" \
   "antigravity review dir"
 
-printf 'process-reviews test ok\n'
+printf 'process test ok\n'

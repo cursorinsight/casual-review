@@ -10,6 +10,42 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "command not found: $1"
 }
 
+cli_require_value() {
+  local option=$1
+  local value=$2
+  local remaining=$3
+
+  ((remaining >= 2)) && [[ -n "$value" ]] ||
+    die "$option needs a value"
+}
+
+cli_validate_engine() {
+  local engine=$1
+  local allow_all=${2:-0}
+
+  case "$engine" in
+    codex|claude|antigravity) ;;
+    all)
+      ((allow_all == 1)) || die "invalid engine: $engine"
+      ;;
+    *) die "invalid engine: $engine" ;;
+  esac
+}
+
+cli_validate_limit() {
+  [[ "$1" =~ ^[0-9]+$ ]] ||
+    die "--limit must be a non-negative integer"
+}
+
+cli_mode() {
+  case "$1" in
+    --dry-run) printf 'dry-run' ;;
+    --interactive) printf 'interactive' ;;
+    --yolo) printf 'yolo' ;;
+    *) die "invalid mode option: $1" ;;
+  esac
+}
+
 write_file_from_command() {
   local output=$1
 

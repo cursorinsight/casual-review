@@ -4,13 +4,15 @@ set -Eeuo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  upload-gerrit-reviews [options] [AI_REVIEWS_DIR]
+  casual-review gerrit upload [options] [AI_REVIEWS_DIR]
 
 Options:
   --dry-run        parse and print what would be posted; no HTTP (default)
   --interactive    ask before each inline comment and review verdict
   --yolo           post every parsed inline comment and review verdict
   --engine NAME    only process reviews from AI_REVIEWS_DIR/NAME
+                   use all to process every engine
+                   (default: CASUAL_REVIEW_ENGINE or all engines)
   --limit N        process only the first N review files after filtering
   -h, --help       show help
 
@@ -20,6 +22,7 @@ Required environment for --interactive and --yolo:
   GERRIT_HTTP_PASSWORD    Gerrit HTTP password or token
 
 Optional environment:
+  CASUAL_REVIEW_ENGINE    engine filter; all selects every engine
   GERRIT_PASSWORD         fallback when GERRIT_HTTP_PASSWORD is unset
   GERRIT_AUTH_TYPE        basic or digest (default: basic)
   GERRIT_NOTIFY           NONE, OWNER, OWNER_REVIEWERS, or ALL (default: NONE)
@@ -40,29 +43,22 @@ Default arguments:
 USAGE
 }
 
-SCRIPT_PATH=${BASH_SOURCE[0]}
-while [[ -L "$SCRIPT_PATH" ]]; do
-  SCRIPT_DIR=$(
-    CDPATH='' cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P
-  )
-  SCRIPT_PATH=$(readlink "$SCRIPT_PATH")
-  [[ "$SCRIPT_PATH" == /* ]] || SCRIPT_PATH=$SCRIPT_DIR/$SCRIPT_PATH
-done
-SCRIPT_DIR=$(
-  CDPATH='' cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P
-)
+[[ -n "${CASUAL_REVIEW_ROOT:-}" ]] || {
+  printf 'Error: run this command through casual-review\n' >&2
+  exit 1
+}
 
-# shellcheck source=bin/common.sh
+# shellcheck source=lib/casual-review/common.sh
 # shellcheck disable=SC1091
-source "$SCRIPT_DIR/common.sh"
+source "$CASUAL_REVIEW_ROOT/lib/casual-review/common.sh"
 
-# shellcheck source=bin/tui.sh
+# shellcheck source=lib/casual-review/tui.sh
 # shellcheck disable=SC1091
-source "$SCRIPT_DIR/tui.sh"
+source "$CASUAL_REVIEW_ROOT/lib/casual-review/tui.sh"
 
-# shellcheck source=bin/gerrit-upload.sh
+# shellcheck source=lib/casual-review/gerrit-upload.sh
 # shellcheck disable=SC1091
-source "$SCRIPT_DIR/gerrit-upload.sh"
+source "$CASUAL_REVIEW_ROOT/lib/casual-review/gerrit-upload.sh"
 
 warn() {
   WARNINGS=$((WARNINGS + 1))
@@ -80,7 +76,7 @@ cleanup() {
 trap cleanup EXIT
 
 MODE=dry-run
-ENGINE_FILTER=
+ENGINE_FILTER=${CASUAL_REVIEW_ENGINE:-}
 LIMIT=0
 REVIEW_DIR=
 REVIEW_DIR_ARG_SET=0
@@ -99,25 +95,17 @@ REVIEW_FILES=()
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 while (($#)); do
   case "$1" in
-    --dry-run)
-      MODE=dry-run
-      shift
-      ;;
-    --interactive)
-      MODE=interactive
-      shift
-      ;;
-    --yolo)
-      MODE=yolo
+    --dry-run|--interactive|--yolo)
+      MODE=$(cli_mode "$1")
       shift
       ;;
     --engine)
-      [[ $# -ge 2 ]] || die "--engine needs a value"
+      cli_require_value "$1" "${2-}" "$#"
       ENGINE_FILTER=$2
       shift 2
       ;;
     --limit)
-      [[ $# -ge 2 ]] || die "--limit needs a value"
+      cli_require_value "$1" "${2-}" "$#"
       LIMIT=$2
       shift 2
       ;;
@@ -138,8 +126,10 @@ while (($#)); do
   esac
 done
 
-[[ "$LIMIT" =~ ^[0-9]+$ ]] || die "--limit must be a non-negative integer"
+cli_validate_limit "$LIMIT"
 fi
+
+[[ "$ENGINE_FILTER" == all ]] && ENGINE_FILTER=
 
 tui_banner() {
   local progress=$1

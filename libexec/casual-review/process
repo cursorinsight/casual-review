@@ -4,10 +4,11 @@ set -Eeuo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  process-reviews [options] [REVIEWS_DIR]
+  casual-review process [options] [REVIEWS_DIR]
 
 Options:
-  --engine NAME     codex, claude, or antigravity (default: codex)
+  --engine NAME     codex, claude, or antigravity
+                    (default: CASUAL_REVIEW_ENGINE or codex)
   --reviews DIR     generated review directory (default: ai-reviews)
   --prompt FILE     prompt template (default: prompts/process-reviews.md)
   --model NAME      model override for the selected engine
@@ -16,6 +17,7 @@ Options:
   -h, --help        show help
 
 Environment overrides:
+  CASUAL_REVIEW_ENGINE
   CODEX_BIN, CLAUDE_BIN, ANTIGRAVITY_BIN
   CODEX_MODEL, CLAUDE_MODEL, ANTIGRAVITY_MODEL
   CODEX_EFFORT, CLAUDE_EFFORT, ANTIGRAVITY_EFFORT
@@ -23,21 +25,14 @@ Environment overrides:
 USAGE
 }
 
-SCRIPT_PATH=${BASH_SOURCE[0]}
-while [[ -L "$SCRIPT_PATH" ]]; do
-  SCRIPT_DIR=$(
-    CDPATH='' cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P
-  )
-  SCRIPT_PATH=$(readlink "$SCRIPT_PATH")
-  [[ "$SCRIPT_PATH" == /* ]] || SCRIPT_PATH=$SCRIPT_DIR/$SCRIPT_PATH
-done
-SCRIPT_DIR=$(
-  CDPATH='' cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P
-)
+[[ -n "${CASUAL_REVIEW_ROOT:-}" ]] || {
+  printf 'Error: run this command through casual-review\n' >&2
+  exit 1
+}
 
-# shellcheck source=bin/common.sh
+# shellcheck source=lib/casual-review/common.sh
 # shellcheck disable=SC1091
-source "$SCRIPT_DIR/common.sh"
+source "$CASUAL_REVIEW_ROOT/lib/casual-review/common.sh"
 
 cleanup() {
   if [[ -n "${PROMPT_TMP:-}" ]]; then
@@ -47,9 +42,8 @@ cleanup() {
 
 trap cleanup EXIT
 
-SELF_DIR=$SCRIPT_DIR
-PACKAGE_DIR=$(CDPATH='' cd -- "$SELF_DIR/.." && pwd -P)
-ENGINE=codex
+PACKAGE_DIR=$CASUAL_REVIEW_ROOT
+ENGINE=${CASUAL_REVIEW_ENGINE:-codex}
 REVIEWS_DIR=ai-reviews
 PROMPT_FILE=$PACKAGE_DIR/prompts/process-reviews.md
 MODEL_OPT=
@@ -62,27 +56,27 @@ REVIEWS_DIR_ABS=
 while (($#)); do
   case "$1" in
     --engine)
-      [[ $# -ge 2 ]] || die "--engine needs a value"
+      cli_require_value "$1" "${2-}" "$#"
       ENGINE=$2
       shift 2
       ;;
     --reviews)
-      [[ $# -ge 2 ]] || die "--reviews needs a value"
+      cli_require_value "$1" "${2-}" "$#"
       REVIEWS_DIR=$2
       shift 2
       ;;
     --prompt)
-      [[ $# -ge 2 ]] || die "--prompt needs a value"
+      cli_require_value "$1" "${2-}" "$#"
       PROMPT_FILE=$2
       shift 2
       ;;
     --model)
-      [[ $# -ge 2 ]] || die "--model needs a value"
+      cli_require_value "$1" "${2-}" "$#"
       MODEL_OPT=$2
       shift 2
       ;;
     --effort)
-      [[ $# -ge 2 ]] || die "--effort needs a value"
+      cli_require_value "$1" "${2-}" "$#"
       EFFORT_OPT=$2
       shift 2
       ;;
@@ -106,10 +100,7 @@ while (($#)); do
   esac
 done
 
-case "$ENGINE" in
-  codex|claude|antigravity) ;;
-  *) die "invalid engine: $ENGINE" ;;
-esac
+cli_validate_engine "$ENGINE"
 
 apply_engine_overrides "$ENGINE" "$MODEL_OPT" "$EFFORT_OPT"
 

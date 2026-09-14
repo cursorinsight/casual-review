@@ -1,4 +1,4 @@
-# Overlay for running review-commits inside Capsule
+# Overlay for running casual-review inside Capsule
 # (https://github.com/cursorinsight/casual-capsule), via its
 # CAPSULE_CUSTOM_COMPOSE extension point. See compose.yml and the
 # "Running inside Capsule" section of README.md.
@@ -6,19 +6,21 @@
 FROM casual-capsule-cli:latest
 
 COPY bin /opt/casual-review/bin
+COPY lib /opt/casual-review/lib
+COPY libexec /opt/casual-review/libexec
 COPY prompts /opt/casual-review/prompts
 RUN chmod -R a+rX \
       /opt/casual-review/bin \
+      /opt/casual-review/lib \
+      /opt/casual-review/libexec \
       /opt/casual-review/prompts && \
     chmod 755 \
-      /opt/casual-review/bin/review-commits \
-      /opt/casual-review/bin/process-reviews \
-      /opt/casual-review/bin/export-gerrit-reviews \
-      /opt/casual-review/bin/upload-gerrit-reviews \
-      /opt/casual-review/bin/respond-gerrit-reviews && \
-    for script in review-commits process-reviews \
-      export-gerrit-reviews upload-gerrit-reviews \
-      respond-gerrit-reviews; do \
-      ln -sf "/opt/casual-review/bin/${script}" \
-        "/usr/local/bin/${script}"; \
-    done
+      /opt/casual-review/bin/casual-review \
+      /opt/casual-review/libexec/casual-review/completion \
+      /opt/casual-review/libexec/casual-review/review \
+      /opt/casual-review/libexec/casual-review/process \
+      /opt/casual-review/libexec/casual-review/gerrit/export \
+      /opt/casual-review/libexec/casual-review/gerrit/upload \
+      /opt/casual-review/libexec/casual-review/gerrit/respond && \
+    ln -sf /opt/casual-review/bin/casual-review \
+      /usr/local/bin/casual-review
