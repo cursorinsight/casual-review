@@ -117,6 +117,7 @@ require_readable browser/casual-review-upload.js
 require_readable browser/upload-gerrit-reviews.user.js
 require_readable tests/browser/gerrit_upload.spec.mjs
 require_executable bin/casual-review
+require_executable libexec/casual-review/completion
 require_executable libexec/casual-review/review
 require_executable libexec/casual-review/process
 require_executable libexec/casual-review/gerrit/export
@@ -141,6 +142,8 @@ require_executable tests/gerrit_respond_test.sh
 run_cmd "casual-review --help" bin/casual-review --help
 run_cmd "casual-review review --help" bin/casual-review review --help
 run_cmd "casual-review process --help" bin/casual-review process --help
+run_cmd "casual-review completion --help" \
+  bin/casual-review completion --help
 run_cmd "casual-review gerrit --help" bin/casual-review gerrit --help
 run_cmd "casual-review gerrit export --help" \
   bin/casual-review gerrit export --help

@@ -1,0 +1,425 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  casual-review completion <bash|zsh|fish>
+
+Generate shell completion code on stdout.
+USAGE
+}
+
+bash_completion() {
+  cat <<'BASH'
+_casual_review() {
+  local action command cur options prev refs value values
+
+  COMPREPLY=()
+  cur=${COMP_WORDS[COMP_CWORD]}
+  prev=${COMP_WORDS[COMP_CWORD - 1]}
+  command=${COMP_WORDS[1]-}
+  action=${COMP_WORDS[2]-}
+
+  if (( COMP_CWORD == 1 )); then
+    values='review process gerrit completion -h --help'
+    # Intentional word splitting for completion candidates.
+    # shellcheck disable=SC2207
+    COMPREPLY=($(compgen -W "$values" -- "$cur"))
+    return
+  fi
+
+  if [[ "$command" == gerrit && $COMP_CWORD == 2 ]]; then
+    values='export upload respond -h --help'
+    # shellcheck disable=SC2207
+    COMPREPLY=($(compgen -W "$values" -- "$cur"))
+    return
+  fi
+
+  if [[ "$command" == completion && $COMP_CWORD == 2 ]]; then
+    # shellcheck disable=SC2207
+    COMPREPLY=($(compgen -W 'bash zsh fish -h --help' -- "$cur"))
+    return
+  fi
+
+  case "$prev" in
+    --engine)
+      values='codex claude antigravity'
+      case "$command:$action" in
+        review:*|gerrit:export|gerrit:upload) values="$values all" ;;
+      esac
+      # shellcheck disable=SC2207
+      COMPREPLY=($(compgen -W "$values" -- "$cur"))
+      return
+      ;;
+    --output|--reviews)
+      while IFS= read -r value; do
+        COMPREPLY+=("$value")
+      done < <(compgen -d -- "$cur")
+      return
+      ;;
+    --prompt)
+      while IFS= read -r value; do
+        COMPREPLY+=("$value")
+      done < <(compgen -f -- "$cur")
+      return
+      ;;
+    --base|--head)
+      refs=$(
+        git for-each-ref --format='%(refname:short)' \
+          refs/heads refs/remotes refs/tags 2>/dev/null
+      )
+      # shellcheck disable=SC2207
+      COMPREPLY=($(compgen -W "$refs" -- "$cur"))
+      return
+      ;;
+    --limit|--model|--effort)
+      return
+      ;;
+  esac
+
+  case "$command:$action" in
+    review:*)
+      options='--engine --base --head --output --prompt --limit --model
+        --effort --use-credits --skip-summary -h --help'
+      ;;
+    process:*)
+      options='--engine --reviews --prompt --model --effort --use-credits
+        -h --help'
+      ;;
+    gerrit:export)
+      options='--output --engine --limit -h --help'
+      ;;
+    gerrit:upload)
+      options='--dry-run --interactive --yolo --engine --limit -h --help'
+      ;;
+    gerrit:respond)
+      options='--dry-run --interactive --yolo --limit -h --help'
+      ;;
+    completion:*)
+      options='-h --help'
+      ;;
+    *)
+      return
+      ;;
+  esac
+
+  if [[ "$cur" == -* ]]; then
+    # shellcheck disable=SC2207
+    COMPREPLY=($(compgen -W "$options" -- "$cur"))
+    return
+  fi
+
+  case "$command:$action" in
+    process:*|gerrit:export|gerrit:upload)
+      while IFS= read -r value; do
+        COMPREPLY+=("$value")
+      done < <(compgen -d -- "$cur")
+      ;;
+    gerrit:respond)
+      while IFS= read -r value; do
+        COMPREPLY+=("$value")
+      done < <(compgen -f -- "$cur")
+      ;;
+  esac
+}
+
+complete -o filenames -F _casual_review casual-review
+BASH
+}
+
+zsh_completion() {
+  cat <<'ZSH'
+#compdef casual-review
+
+_casual_review_review() {
+  _arguments \
+    '--engine[select engine]:engine:(codex claude antigravity all)' \
+    '--base[set base ref]:ref:' \
+    '--head[set head ref]:ref:' \
+    '--output[set output directory]:directory:_directories' \
+    '--prompt[set prompt template]:file:_files' \
+    '--limit[limit commits]:count:' \
+    '--model[override model]:model:' \
+    '--effort[override reasoning effort]:effort:' \
+    '--use-credits[allow metered API billing]' \
+    '--skip-summary[skip aggregate summary]' \
+    '(-h --help)-h[show help]' \
+    '(-h --help)--help[show help]' \
+    '1:command:(review)'
+}
+
+_casual_review_process() {
+  _arguments \
+    '--engine[select engine]:engine:(codex claude antigravity)' \
+    '--reviews[set review directory]:directory:_directories' \
+    '--prompt[set prompt template]:file:_files' \
+    '--model[override model]:model:' \
+    '--effort[override reasoning effort]:effort:' \
+    '--use-credits[allow metered API billing]' \
+    '(-h --help)-h[show help]' \
+    '(-h --help)--help[show help]' \
+    '1:command:(process)' \
+    '2:reviews directory:_directories'
+}
+
+_casual_review_gerrit_export() {
+  _arguments \
+    '--output[set output directory]:directory:_directories' \
+    '--engine[filter engine]:engine:(codex claude antigravity all)' \
+    '--limit[limit review files]:count:' \
+    '(-h --help)-h[show help]' \
+    '(-h --help)--help[show help]' \
+    '1:command:(gerrit)' \
+    '2:Gerrit command:(export)' \
+    '3:reviews directory:_directories'
+}
+
+_casual_review_gerrit_upload() {
+  _arguments \
+    '--dry-run[print actions without HTTP requests]' \
+    '--interactive[confirm each comment and verdict]' \
+    '--yolo[post all comments and verdicts]' \
+    '--engine[filter engine]:engine:(codex claude antigravity all)' \
+    '--limit[limit review files]:count:' \
+    '(-h --help)-h[show help]' \
+    '(-h --help)--help[show help]' \
+    '1:command:(gerrit)' \
+    '2:Gerrit command:(upload)' \
+    '3:reviews directory:_directories'
+}
+
+_casual_review_gerrit_respond() {
+  _arguments \
+    '--dry-run[print actions without HTTP requests]' \
+    '--interactive[confirm each Gerrit reply]' \
+    '--yolo[post all matched decisions]' \
+    '--limit[limit decision entries]:count:' \
+    '(-h --help)-h[show help]' \
+    '(-h --help)--help[show help]' \
+    '1:command:(gerrit)' \
+    '2:Gerrit command:(respond)' \
+    '3:reviews directory:_directories' \
+    '4:decisions file:_files'
+}
+
+_casual_review_completion() {
+  _arguments \
+    '(-h --help)-h[show help]' \
+    '(-h --help)--help[show help]' \
+    '1:command:(completion)' \
+    '2:shell:(bash zsh fish)'
+}
+
+_casual_review() {
+  local action
+  local -a commands gerrit_commands
+
+  commands=(
+    'review:review commits with an AI engine'
+    'process:process generated review findings'
+    'gerrit:operate on Gerrit reviews'
+    'completion:generate shell completion code'
+    '-h:show help'
+    '--help:show help'
+  )
+  gerrit_commands=(
+    'export:export compressed browser upload bundles'
+    'upload:upload generated reviews through the REST API'
+    'respond:respond to uploaded comments from a decision log'
+    '-h:show help'
+    '--help:show help'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe 'command' commands
+    return
+  fi
+
+  case $words[2] in
+    review)
+      _casual_review_review
+      ;;
+    process)
+      _casual_review_process
+      ;;
+    completion)
+      _casual_review_completion
+      ;;
+    gerrit)
+      if (( CURRENT == 3 )); then
+        _describe 'Gerrit command' gerrit_commands
+        return
+      fi
+      action=$words[3]
+      case $action in
+        export) _casual_review_gerrit_export ;;
+        upload) _casual_review_gerrit_upload ;;
+        respond) _casual_review_gerrit_respond ;;
+      esac
+      ;;
+  esac
+}
+
+_casual_review "$@"
+ZSH
+}
+
+fish_completion() {
+  cat <<'FISH'
+function __casual_review_needs_command
+  set -l tokens (commandline -opc)
+  test (count $tokens) -eq 1
+end
+
+function __casual_review_uses
+  set -l tokens (commandline -opc)
+  test (count $tokens) -ge 2; and test "$tokens[2]" = "$argv[1]"
+end
+
+function __casual_review_gerrit_needs_command
+  set -l tokens (commandline -opc)
+  test (count $tokens) -eq 2; and test "$tokens[2]" = gerrit
+end
+
+function __casual_review_gerrit_uses
+  set -l tokens (commandline -opc)
+  test (count $tokens) -ge 3
+  and test "$tokens[2]" = gerrit
+  and test "$tokens[3]" = "$argv[1]"
+end
+
+complete -c casual-review -n __casual_review_needs_command -f \
+  -a review -d 'Review commits with an AI engine'
+complete -c casual-review -n __casual_review_needs_command -f \
+  -a process -d 'Process generated review findings'
+complete -c casual-review -n __casual_review_needs_command -f \
+  -a gerrit -d 'Operate on Gerrit reviews'
+complete -c casual-review -n __casual_review_needs_command -f \
+  -a completion -d 'Generate shell completion code'
+complete -c casual-review -n __casual_review_needs_command \
+  -s h -l help -d 'Show help'
+
+complete -c casual-review -n __casual_review_gerrit_needs_command -f \
+  -a export -d 'Export compressed browser upload bundles'
+complete -c casual-review -n __casual_review_gerrit_needs_command -f \
+  -a upload -d 'Upload reviews through the Gerrit REST API'
+complete -c casual-review -n __casual_review_gerrit_needs_command -f \
+  -a respond -d 'Respond to uploaded Gerrit comments'
+complete -c casual-review -n __casual_review_gerrit_needs_command \
+  -s h -l help -d 'Show help'
+
+complete -c casual-review -n '__casual_review_uses completion' -f \
+  -a 'bash zsh fish'
+
+complete -c casual-review -n '__casual_review_uses review' -l engine -r \
+  -f -a 'codex claude antigravity all' -d 'Select engine'
+complete -c casual-review -n '__casual_review_uses review' -l base -r \
+  -d 'Set base ref'
+complete -c casual-review -n '__casual_review_uses review' -l head -r \
+  -d 'Set head ref'
+complete -c casual-review -n '__casual_review_uses review' -l output -r \
+  -a '(__fish_complete_directories)' -d 'Set output directory'
+complete -c casual-review -n '__casual_review_uses review' -l prompt -r \
+  -d 'Set prompt template'
+complete -c casual-review -n '__casual_review_uses review' -l limit -r \
+  -d 'Limit commits'
+complete -c casual-review -n '__casual_review_uses review' -l model -r \
+  -d 'Override model'
+complete -c casual-review -n '__casual_review_uses review' -l effort -r \
+  -d 'Override reasoning effort'
+complete -c casual-review -n '__casual_review_uses review' \
+  -l use-credits -d 'Allow metered API billing'
+complete -c casual-review -n '__casual_review_uses review' \
+  -l skip-summary -d 'Skip aggregate summary'
+
+complete -c casual-review -n '__casual_review_uses process' -l engine -r \
+  -f -a 'codex claude antigravity' -d 'Select engine'
+complete -c casual-review -n '__casual_review_uses process' -l reviews -r \
+  -a '(__fish_complete_directories)' -d 'Set review directory'
+complete -c casual-review -n '__casual_review_uses process' -l prompt -r \
+  -d 'Set prompt template'
+complete -c casual-review -n '__casual_review_uses process' -l model -r \
+  -d 'Override model'
+complete -c casual-review -n '__casual_review_uses process' -l effort -r \
+  -d 'Override reasoning effort'
+complete -c casual-review -n '__casual_review_uses process' \
+  -l use-credits -d 'Allow metered API billing'
+
+complete -c casual-review \
+  -n '__casual_review_gerrit_uses export' -l output -r \
+  -a '(__fish_complete_directories)' -d 'Set output directory'
+
+for action in export upload
+  complete -c casual-review \
+    -n "__casual_review_gerrit_uses $action" -l engine -r \
+    -f -a 'codex claude antigravity all' -d 'Filter engine'
+end
+
+for action in export upload respond
+  complete -c casual-review \
+    -n "__casual_review_gerrit_uses $action" -l limit -r \
+    -d 'Limit entries'
+end
+
+for action in upload respond
+  complete -c casual-review \
+    -n "__casual_review_gerrit_uses $action" \
+    -l dry-run -d 'Print actions without HTTP requests'
+  complete -c casual-review \
+    -n "__casual_review_gerrit_uses $action" \
+    -l interactive -d 'Confirm each action'
+  complete -c casual-review \
+    -n "__casual_review_gerrit_uses $action" \
+    -l yolo -d 'Post all actions'
+end
+
+for command in review process completion
+  complete -c casual-review -n "__casual_review_uses $command" \
+    -s h -l help -d 'Show help'
+end
+
+for action in export upload respond
+  complete -c casual-review \
+    -n "__casual_review_gerrit_uses $action" \
+    -s h -l help -d 'Show help'
+end
+FISH
+}
+
+case "${1-}" in
+  bash)
+    (($# == 1)) || {
+      printf 'Error: unexpected argument: %s\n' "$2" >&2
+      exit 2
+    }
+    bash_completion
+    ;;
+  zsh)
+    (($# == 1)) || {
+      printf 'Error: unexpected argument: %s\n' "$2" >&2
+      exit 2
+    }
+    zsh_completion
+    ;;
+  fish)
+    (($# == 1)) || {
+      printf 'Error: unexpected argument: %s\n' "$2" >&2
+      exit 2
+    }
+    fish_completion
+    ;;
+  -h|--help)
+    usage
+    ;;
+  '')
+    printf 'Error: shell is required\n\n' >&2
+    usage >&2
+    exit 2
+    ;;
+  *)
+    printf 'Error: unsupported shell: %s\n\n' "$1" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

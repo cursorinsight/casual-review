@@ -47,9 +47,46 @@ The package exposes one public executable:
 ```text
 casual-review review
 casual-review process
+casual-review completion bash|zsh|fish
 casual-review gerrit export
 casual-review gerrit upload
 casual-review gerrit respond
+```
+
+## Shell Completion
+
+`casual-review completion` generates native completion code. Regenerate it
+after updating `casual-review` so command and option lists stay current.
+
+Bash, using the standard per-user `bash-completion` directory:
+
+```bash
+mkdir -p "$HOME/.local/share/bash-completion/completions"
+casual-review completion bash > \
+  "$HOME/.local/share/bash-completion/completions/casual-review"
+```
+
+Zsh, using a per-user function directory already present in `fpath`:
+
+```zsh
+mkdir -p "$HOME/.local/share/zsh/site-functions"
+casual-review completion zsh > \
+  "$HOME/.local/share/zsh/site-functions/_casual-review"
+```
+
+Add that directory to `fpath` before `compinit` when it is not already there:
+
+```zsh
+fpath=("$HOME/.local/share/zsh/site-functions" $fpath)
+autoload -Uz compinit && compinit
+```
+
+Fish loads completions directly from its per-user completion directory:
+
+```fish
+mkdir -p "$HOME/.config/fish/completions"
+casual-review completion fish > \
+  "$HOME/.config/fish/completions/casual-review.fish"
 ```
 
 ## Result layout

@@ -10,6 +10,7 @@ Commands:
   review             review commits with an AI engine
   process            process generated review findings
   gerrit <command>   export, upload, or respond to Gerrit reviews
+  completion <shell> generate Bash, Zsh, or Fish completion code
 
 Run 'casual-review <command> --help' for command-specific help.
 USAGE
@@ -66,7 +67,7 @@ run_leaf() {
 }
 
 case "${1-}" in
-  review|process)
+  review|process|completion)
     leaf=$1
     shift
     run_leaf "$leaf" "$@"

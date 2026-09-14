@@ -16,6 +16,7 @@ RUN chmod -R a+rX \
       /opt/casual-review/prompts && \
     chmod 755 \
       /opt/casual-review/bin/casual-review \
+      /opt/casual-review/libexec/casual-review/completion \
       /opt/casual-review/libexec/casual-review/review \
       /opt/casual-review/libexec/casual-review/process \
       /opt/casual-review/libexec/casual-review/gerrit/export \
