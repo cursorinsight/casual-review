@@ -1,0 +1,782 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  casual-review github upload [options] [AI_REVIEWS_DIR]
+
+Options:
+  --dry-run        parse and print reviews; do not call GitHub (default)
+  --interactive    ask before each comment, verdict, and final submission
+  --yolo           submit every parsed inline comment and verdict
+  --pr PR          pull-request number, URL, or branch
+                   (default: pull request for the current branch)
+  --repo REPO      repository in OWNER/REPO or HOST/OWNER/REPO form
+  --engine NAME    only process reviews from AI_REVIEWS_DIR/NAME
+                   use all to process every engine
+                   (default: CASUAL_REVIEW_ENGINE or all engines)
+  --limit N        process only the first N review files after filtering
+  -h, --help       show help
+
+Authentication for --interactive and --yolo:
+  Set GITHUB_TOKEN, GH_TOKEN, or authenticate with gh auth login.
+
+Optional environment:
+  CASUAL_REVIEW_ENGINE  engine filter; all selects every engine
+  GH_BIN                GitHub CLI executable (default: gh)
+  NO_COLOR              disable interactive colors
+
+Default arguments:
+  AI_REVIEWS_DIR        ai-reviews
+
+Unified verdict mapping:
+  Reject, Needs changes           REQUEST_CHANGES
+  Looks good with minor comments  COMMENT
+  LGTM                            APPROVE
+USAGE
+}
+
+[[ -n "${CASUAL_REVIEW_ROOT:-}" ]] || {
+  printf 'Error: run this command through casual-review\n' >&2
+  exit 1
+}
+
+# shellcheck source=lib/casual-review/common.sh
+# shellcheck disable=SC1091
+source "$CASUAL_REVIEW_ROOT/lib/casual-review/common.sh"
+
+# shellcheck source=lib/casual-review/tui.sh
+# shellcheck disable=SC1091
+source "$CASUAL_REVIEW_ROOT/lib/casual-review/tui.sh"
+
+# shellcheck source=lib/casual-review/gerrit-upload.sh
+# shellcheck disable=SC1091
+source "$CASUAL_REVIEW_ROOT/lib/casual-review/gerrit-upload.sh"
+
+warn() {
+  WARNINGS=$((WARNINGS + 1))
+  if [[ "$MODE" == interactive && "$TUI_ACTIVE" == 1 ]]; then
+    prompt_status "WARNING: $*" warn
+  else
+    printf 'Warning: %s\n' "$*" >&2
+  fi
+}
+
+MODE=dry-run
+ENGINE_FILTER=${CASUAL_REVIEW_ENGINE:-}
+LIMIT=0
+PR_SELECTOR=
+REPO=
+REVIEW_DIR=
+REVIEW_DIR_ARG_SET=0
+GH_BIN=${GH_BIN:-gh}
+PR_NUMBER=
+PR_URL=
+API_REPO=
+PR_HEAD_SHA=
+PR_COMMITS='[]'
+EXISTING_COMMENTS='[]'
+EXISTING_REVIEWS='[]'
+NEXT_EXISTING_COMMENTS=
+NEXT_EXISTING_REVIEWS=
+WARNINGS=0
+TOTAL_REVIEWS=0
+POSTED_REVIEWS=0
+DRY_RUN_REVIEWS=0
+SKIPPED_REVIEWS=0
+SKIPPED_COMMENTS=0
+DUPLICATE_COMMENTS=0
+DUPLICATE_VERDICTS=0
+FAILED_REVIEWS=0
+INTERACTIVE_TOTAL=0
+INTERACTIVE_INDEX=0
+TUI_ACTIVE=0
+REVIEW_FILES=()
+AGGREGATE_VERDICT=
+AGGREGATE_VERDICT_RANK=0
+AGGREGATE_MESSAGES=()
+AGGREGATE_COMMITS=()
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+while (($#)); do
+  case "$1" in
+    --dry-run|--interactive|--yolo)
+      MODE=$(cli_mode "$1")
+      shift
+      ;;
+    --pr)
+      cli_require_value "$1" "${2-}" "$#"
+      PR_SELECTOR=$2
+      shift 2
+      ;;
+    --repo)
+      cli_require_value "$1" "${2-}" "$#"
+      REPO=$2
+      shift 2
+      ;;
+    --engine)
+      cli_require_value "$1" "${2-}" "$#"
+      ENGINE_FILTER=$2
+      shift 2
+      ;;
+    --limit)
+      cli_require_value "$1" "${2-}" "$#"
+      LIMIT=$2
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -*)
+      die "unknown option: $1"
+      ;;
+    *)
+      ((REVIEW_DIR_ARG_SET == 0)) ||
+        die "only one AI_REVIEWS_DIR is supported"
+      REVIEW_DIR=$1
+      REVIEW_DIR_ARG_SET=1
+      shift
+      ;;
+  esac
+done
+
+cli_validate_limit "$LIMIT"
+fi
+
+[[ "$ENGINE_FILTER" == all ]] && ENGINE_FILTER=
+
+github_gh() {
+  if [[ -n "$REPO" ]]; then
+    GH_REPO=$REPO "$GH_BIN" "$@"
+  else
+    "$GH_BIN" "$@"
+  fi
+}
+
+github_collection() {
+  local endpoint=$1
+  local pages
+
+  pages=$(github_gh api "$endpoint" --paginate --slurp) || return 1
+  jq -c 'add // []' <<<"$pages"
+}
+
+resolve_pull_request() {
+  local info
+  local host
+  local url_repo
+  local -a args=(pr view)
+
+  [[ -z "$PR_SELECTOR" ]] || args+=("$PR_SELECTOR")
+  args+=(--json "number,url,headRefOid")
+  info=$(github_gh "${args[@]}") || return 1
+
+  PR_NUMBER=$(jq -er '.number | tostring' <<<"$info") || return 1
+  PR_URL=$(jq -er '.url' <<<"$info") || return 1
+  PR_HEAD_SHA=$(jq -er '
+    .headRefOid
+    | select(type == "string" and length > 0)
+  ' <<<"$info") || return 1
+  host=$(jq -er '.url | capture("^https?://(?<host>[^/]+)/").host' \
+    <<<"$info") || return 1
+  url_repo=$(jq -er '
+    .url
+    | sub("^https?://[^/]+/"; "")
+    | split("/pull/")[0]
+    | select(test("^[^/]+/[^/]+$"))
+  ' <<<"$info") || return 1
+  API_REPO=$url_repo
+  if [[ -z "$REPO" && "$host" == github.com ]]; then
+    REPO=$url_repo
+  elif [[ -z "$REPO" ]]; then
+    REPO=$host/$url_repo
+  fi
+}
+
+pull_request_head() {
+  local info
+
+  info=$(github_gh pr view "$PR_NUMBER" --json headRefOid) || return 1
+  jq -er '
+    .headRefOid
+    | select(type == "string" and length > 0)
+  ' <<<"$info"
+}
+
+load_pull_request_state() {
+  local base="repos/$API_REPO/pulls/$PR_NUMBER"
+
+  PR_COMMITS=$(github_collection "$base/commits") || return 1
+  EXISTING_COMMENTS=$(github_collection "$base/comments") || return 1
+  EXISTING_REVIEWS=$(github_collection "$base/reviews") || return 1
+}
+
+commit_belongs_to_pull_request() {
+  local commit=$1
+
+  jq -e --arg commit "$commit" '
+    any(.[]; .sha == $commit)
+  ' >/dev/null <<<"$PR_COMMITS"
+}
+
+filter_unsupported_comments() {
+  local i=0
+  local line
+
+  while ((i < ${#COMMENT_PATHS[@]})); do
+    line=${COMMENT_LINES[$i]:-}
+    if [[ ${ACCEPT_COMMENTS[$i]:-0} == 1 &&
+        ! "$line" =~ ^[1-9][0-9]*$ ]]; then
+      warn "$CURRENT_FILE: skipping ${COMMENT_PATHS[$i]} without a line"
+      ACCEPT_COMMENTS[i]=0
+      SKIPPED_COMMENTS=$((SKIPPED_COMMENTS + 1))
+    fi
+    i=$((i + 1))
+  done
+}
+
+github_comments_json() {
+  local comments
+
+  comments=$(build_comments_array_json) || return 1
+  jq -c '[
+    .[]
+    | select(has("line"))
+    | {path: .path, line: .line, side: "RIGHT", body: .message}
+  ]' <<<"$comments"
+}
+
+github_event() {
+  case "$1" in
+    Reject|"Needs changes") printf 'REQUEST_CHANGES' ;;
+    LGTM) printf 'APPROVE' ;;
+    *) printf 'COMMENT' ;;
+  esac
+}
+
+github_review_body() {
+  local marker
+
+  marker=$(review_message_marker "$REVIEW_ENGINE" \
+    "${REVIEW_COMMIT:0:7}")
+  printf '%s\n\nAdditional inline review comments.' "$marker"
+}
+
+github_review_json() {
+  local comments=$1
+  local body=$2
+  local event=$3
+
+  jq -c -n \
+    --arg commit "$REVIEW_COMMIT" \
+    --arg body "$body" \
+    --arg event "$event" \
+    --argjson comments "$comments" '
+      {
+        commit_id: $commit,
+        body: $body,
+        event: $event,
+        comments: $comments
+      }
+    '
+}
+
+verdict_rank() {
+  case "$1" in
+    Reject) printf '4' ;;
+    "Needs changes") printf '3' ;;
+    "Looks good with minor comments") printf '2' ;;
+    LGTM) printf '1' ;;
+    *) printf '0' ;;
+  esac
+}
+
+accumulate_verdict() {
+  local idx=${#AGGREGATE_MESSAGES[@]}
+  local message
+  local rank
+
+  message=$(build_review_message) || return 1
+  rank=$(verdict_rank "$REVIEW_VERDICT")
+  AGGREGATE_MESSAGES[idx]=$message
+  AGGREGATE_COMMITS[idx]=$REVIEW_COMMIT
+  if ((rank > AGGREGATE_VERDICT_RANK)); then
+    AGGREGATE_VERDICT=$REVIEW_VERDICT
+    AGGREGATE_VERDICT_RANK=$rank
+  fi
+}
+
+approval_has_full_coverage() {
+  local covered
+  local pr_commit
+  local reviewed_commit
+  local total=0
+
+  while IFS= read -r pr_commit; do
+    total=$((total + 1))
+    covered=0
+    for reviewed_commit in "${AGGREGATE_COMMITS[@]}"; do
+      if [[ "$reviewed_commit" == "$pr_commit" ]]; then
+        covered=1
+        break
+      fi
+    done
+    ((covered)) || return 1
+  done < <(jq -r '.[].sha' <<<"$PR_COMMITS")
+  ((total > 0))
+}
+
+build_unified_review_body() {
+  local body="AI review summary"
+  local count=${#AGGREGATE_MESSAGES[@]}
+  local message
+  local noun=reviews
+
+  ((count != 1)) || noun=review
+  body+=$'\n\n'"**Verdict:** $AGGREGATE_VERDICT"
+  body+=$'\n\n'"Strictest verdict from $count selected commit $noun."
+  for message in "${AGGREGATE_MESSAGES[@]}"; do
+    body+=$'\n\n---\n\n'"$message"
+  done
+  printf '%s' "$body"
+}
+
+github_unified_review_json() {
+  local body=$1
+  local event=$2
+
+  jq -c -n \
+    --arg commit "$PR_HEAD_SHA" \
+    --arg body "$body" \
+    --arg event "$event" \
+    '{body: $body, event: $event}
+    | if $commit == "" then . else . + {commit_id: $commit} end'
+}
+
+github_comment_already_posted() {
+  local path=$1
+  local line=$2
+  local body=$3
+
+  jq -e \
+    --arg path "$path" \
+    --argjson line "$line" \
+    --arg body "$body" \
+    --arg commit "$REVIEW_COMMIT" '
+      any(.[];
+        .path == $path
+        and (.body // "") == $body
+        and (
+          (
+            .commit_id == $commit
+            and (.line // 0) == $line
+          )
+          or (
+            .original_commit_id == $commit
+            and (.original_line // 0) == $line
+          )
+        )
+      )
+    ' >/dev/null <<<"$EXISTING_COMMENTS"
+}
+
+filter_github_duplicate_comments() {
+  local i=0
+  local body
+
+  while ((i < ${#COMMENT_PATHS[@]})); do
+    if [[ ${ACCEPT_COMMENTS[$i]:-0} == 1 ]]; then
+      body=$(format_comment "$i")
+      if github_comment_already_posted \
+          "${COMMENT_PATHS[$i]}" \
+          "${COMMENT_LINES[$i]}" \
+          "$body"; then
+        ACCEPT_COMMENTS[i]=0
+        DUPLICATE_COMMENTS=$((DUPLICATE_COMMENTS + 1))
+      fi
+    fi
+    i=$((i + 1))
+  done
+}
+
+unified_verdict_already_posted() {
+  local body=$1
+
+  if jq -e \
+      --arg body "$body" '
+        any(.[];
+          (.state // "") != "DISMISSED"
+          and (.state // "") != "PENDING"
+          and (.body // "") == $body
+        )
+      ' >/dev/null <<<"$EXISTING_REVIEWS"; then
+    return 0
+  fi
+  return 1
+}
+
+selection_is_empty() {
+  [[ $(selected_comment_count) == 0 && "$ACCEPT_JUDGEMENT" != 1 ]]
+}
+
+prepare_posted_review_cache() {
+  local payload=$1
+  local comments
+  local review
+
+  comments=$(jq -c --arg commit "$REVIEW_COMMIT" '
+    (.comments // [])
+    | map(. + {
+        commit_id: $commit,
+        original_commit_id: $commit
+      })
+  ' <<<"$payload") || return 1
+  review=$(jq -c --arg commit "$REVIEW_COMMIT" '
+    {commit_id: $commit, body: .body}
+  ' <<<"$payload") || return 1
+  NEXT_EXISTING_COMMENTS=$(jq -c \
+    --argjson old "$EXISTING_COMMENTS" \
+    --argjson new "$comments" \
+    -n '$old + $new') || return 1
+  NEXT_EXISTING_REVIEWS=$(jq -c \
+    --argjson old "$EXISTING_REVIEWS" \
+    --argjson new "$review" \
+    -n '$old + [$new]') || return 1
+}
+
+post_github_review() {
+  local payload=$1
+  local endpoint="repos/$API_REPO/pulls/$PR_NUMBER/reviews"
+
+  printf '%s' "$payload" |
+    github_gh api "$endpoint" --method POST --input - --silent
+}
+
+tui_banner() {
+  local progress=$1
+  local body
+
+  body="Pull request: $PR_URL"
+  body+=$'\n'"Directory: $REVIEW_DIR"
+  body+=$'\n'"Mode: interactive"
+  body+=$'\n'"Reviews: $INTERACTIVE_TOTAL"
+  [[ -z "$ENGINE_FILTER" ]] || body+=$'\n'"Engine: $ENGINE_FILTER"
+  [[ -z "$progress" ]] || body+=$'\n'"Progress: $progress"
+  tui_box "GitHub review uploader" info "$body"
+}
+
+tui_review_header() {
+  local file=$1
+  local short=${REVIEW_COMMIT:0:7}
+  local progress
+  local body
+  local verdict=${REVIEW_VERDICT:-none}
+
+  progress=$(tui_progress_bar "$INTERACTIVE_INDEX" "$INTERACTIVE_TOTAL")
+  body="File: $file"
+  body+=$'\n'"Commit: $short"
+  [[ -z "$REVIEW_SUBJECT" ]] || body+=$'\n'"Subject: $REVIEW_SUBJECT"
+  body+=$'\n'"Engine: $REVIEW_ENGINE"
+  body+=$'\n'"Inline comments: $(selected_comment_count)"
+  body+=$'\n'"Verdict: $verdict"
+  body+=$'\n'"Progress: $progress"
+  tui_box "Review $INTERACTIVE_INDEX/$INTERACTIVE_TOTAL - $short" \
+    info "$body"
+}
+
+interactive_select() {
+  local i=0
+  local location
+  local severity
+  local title
+
+  while ((i < ${#COMMENT_PATHS[@]})); do
+    if [[ ${ACCEPT_COMMENTS[$i]:-0} != 1 ]]; then
+      i=$((i + 1))
+      continue
+    fi
+    location=$(comment_location "$i")
+    severity=${COMMENT_SEVERITIES[$i]:-info}
+    title="Comment $((i + 1))/${#COMMENT_PATHS[@]} - $location"
+    tui_box "$title" "$severity" "$(format_comment "$i")"
+    if confirm "Include this inline comment?"; then
+      prompt_status "INCLUDE selected." good
+    else
+      ACCEPT_COMMENTS[i]=0
+      prompt_status "SKIP selected." warn
+    fi
+    i=$((i + 1))
+  done
+
+  if [[ -n "$REVIEW_VERDICT" ]]; then
+    tui_box "Review verdict" info \
+      "Verdict: $REVIEW_VERDICT"$'\n\n'"$REVIEW_JUSTIFICATION"
+    if confirm "Include this verdict in the unified decision?"; then
+      ACCEPT_JUDGEMENT=1
+      prompt_status "INCLUDE verdict selected." good
+    else
+      ACCEPT_JUDGEMENT=0
+      prompt_status "SKIP verdict selected." warn
+    fi
+  fi
+}
+
+print_dry_run() {
+  local file=$1
+  local payload=$2
+  local target=${PR_SELECTOR:-current branch}
+
+  printf '\nDRY-RUN %s\n' "$file"
+  printf '  pull request: %s\n' "$target"
+  [[ -z "$REPO" ]] || printf '  repository: %s\n' "$REPO"
+  printf '  commit: %s\n' "${REVIEW_COMMIT:0:7}"
+  printf '  engine: %s\n' "$REVIEW_ENGINE"
+  printf '  event: %s\n' "$(jq -r '.event' <<<"$payload")"
+  printf '  review body:\n'
+  jq -r '.body | split("\n") | map("    | " + .) | join("\n")' \
+    <<<"$payload"
+  printf '  inline comments: %s\n' \
+    "$(jq -r '.comments | length' <<<"$payload")"
+  jq -r '
+    .comments[]
+    | "  comment: \(.path):\(.line)\n"
+      + (.body | split("\n") | map("    | " + .) | join("\n"))
+  ' <<<"$payload"
+}
+
+print_unified_dry_run() {
+  local payload=$1
+  local target=${PR_SELECTOR:-current branch}
+
+  printf '\nDRY-RUN unified verdict\n'
+  printf '  pull request: %s\n' "$target"
+  [[ -z "$REPO" ]] || printf '  repository: %s\n' "$REPO"
+  printf '  event: %s\n' "$(jq -r '.event' <<<"$payload")"
+  printf '  verdict: %s\n' "$AGGREGATE_VERDICT"
+  printf '  review body:\n'
+  jq -r '.body | split("\n") | map("    | " + .) | join("\n")' \
+    <<<"$payload"
+}
+
+submit_unified_verdict() {
+  local body
+  local current_head
+  local event
+  local payload
+
+  ((${#AGGREGATE_MESSAGES[@]} > 0)) || return 0
+  body=$(build_unified_review_body) || return 1
+  event=$(github_event "$AGGREGATE_VERDICT")
+  if [[ "$MODE" != dry-run && "$event" == APPROVE ]] &&
+      ! approval_has_full_coverage; then
+    warn "refusing approval: selected verdicts do not cover every" \
+      "pull-request commit"
+    return 1
+  fi
+  payload=$(github_unified_review_json "$body" "$event") || return 1
+
+  if [[ "$MODE" == dry-run ]]; then
+    print_unified_dry_run "$payload" || return 1
+    DRY_RUN_REVIEWS=$((DRY_RUN_REVIEWS + 1))
+    return 0
+  fi
+  if unified_verdict_already_posted "$body"; then
+    DUPLICATE_VERDICTS=$((DUPLICATE_VERDICTS + 1))
+    printf 'Skipping unified verdict: already posted to GitHub.\n' >&2
+    return 0
+  fi
+  if [[ "$MODE" == interactive ]]; then
+    tui_box "Unified review verdict" info "$body"
+    if ! confirm "Submit this unified review verdict?"; then
+      prompt_status "SKIP unified verdict selected." warn
+      return 0
+    fi
+  fi
+
+  if ! current_head=$(pull_request_head); then
+    warn "could not revalidate pull request head"
+    return 1
+  fi
+  if [[ "$current_head" != "$PR_HEAD_SHA" ]]; then
+    warn "pull request head changed from $PR_HEAD_SHA to $current_head;" \
+      "refusing unified verdict"
+    return 1
+  fi
+
+  post_github_review "$payload" || return 1
+  printf 'Posted unified verdict to GitHub pull request #%s.\n' \
+    "$PR_NUMBER"
+  POSTED_REVIEWS=$((POSTED_REVIEWS + 1))
+}
+
+process_review() {
+  local file=$1
+  local body
+  local comments
+  local payload
+  local verdict_selected=0
+
+  if ! parse_review_file "$file"; then
+    SKIPPED_REVIEWS=$((SKIPPED_REVIEWS + 1))
+    return 0
+  fi
+  TOTAL_REVIEWS=$((TOTAL_REVIEWS + 1))
+  if [[ "$MODE" == interactive ]]; then
+    INTERACTIVE_INDEX=$((INTERACTIVE_INDEX + 1))
+  fi
+  initialize_acceptance
+  filter_unsupported_comments
+
+  if selection_is_empty; then
+    printf 'Skipping %s: no supported comments or verdict.\n' "$file" >&2
+    SKIPPED_REVIEWS=$((SKIPPED_REVIEWS + 1))
+    return 0
+  fi
+
+  if [[ "$MODE" != dry-run ]]; then
+    if ! commit_belongs_to_pull_request "$REVIEW_COMMIT"; then
+      warn "$file: commit is not part of pull request #$PR_NUMBER"
+      return 1
+    fi
+    filter_github_duplicate_comments
+    if selection_is_empty; then
+      printf 'Skipping %s: already posted to GitHub.\n' "$file" >&2
+      SKIPPED_REVIEWS=$((SKIPPED_REVIEWS + 1))
+      return 0
+    fi
+  fi
+
+  if [[ "$MODE" == interactive ]]; then
+    tui_review_header "$file"
+    interactive_select
+  fi
+
+  if selection_is_empty; then
+    printf 'Skipping %s: nothing selected.\n' "$file" >&2
+    SKIPPED_REVIEWS=$((SKIPPED_REVIEWS + 1))
+    return 0
+  fi
+
+  if [[ "$ACCEPT_JUDGEMENT" == 1 ]]; then
+    accumulate_verdict || return 1
+    verdict_selected=1
+  fi
+  ACCEPT_JUDGEMENT=0
+  if [[ $(selected_comment_count) == 0 ]]; then
+    if ((verdict_selected)); then
+      printf 'Collected verdict from %s for unified submission.\n' "$file"
+      return 0
+    fi
+    printf 'Skipping %s: nothing selected.\n' "$file" >&2
+    SKIPPED_REVIEWS=$((SKIPPED_REVIEWS + 1))
+    return 0
+  fi
+
+  comments=$(github_comments_json) || return 1
+  body=$(github_review_body) || return 1
+  payload=$(github_review_json "$comments" "$body" COMMENT) || return 1
+
+  if [[ "$MODE" == dry-run ]]; then
+    print_dry_run "$file" "$payload" || return 1
+    DRY_RUN_REVIEWS=$((DRY_RUN_REVIEWS + 1))
+    return 0
+  fi
+
+  prepare_posted_review_cache "$payload" || return 1
+  post_github_review "$payload" || return 1
+  EXISTING_COMMENTS=$NEXT_EXISTING_COMMENTS
+  EXISTING_REVIEWS=$NEXT_EXISTING_REVIEWS
+  printf 'Posted %s to GitHub pull request #%s.\n' "$file" "$PR_NUMBER"
+  POSTED_REVIEWS=$((POSTED_REVIEWS + 1))
+}
+
+main() {
+  local engine
+  local file
+  local summary_body
+
+  if ((REVIEW_DIR_ARG_SET)); then
+    [[ -n "$REVIEW_DIR" ]] || die "AI_REVIEWS_DIR must not be empty"
+  else
+    REVIEW_DIR=ai-reviews
+  fi
+  [[ -d "$REVIEW_DIR" ]] || die "not a directory: $REVIEW_DIR"
+  need jq
+
+  if [[ "$MODE" != dry-run ]]; then
+    need "$GH_BIN"
+    resolve_pull_request || die "could not resolve pull request"
+    load_pull_request_state || die "could not load pull request state"
+  fi
+  if [[ "$MODE" == interactive ]]; then
+    (: <>/dev/tty) 2>/dev/null ||
+      die "--interactive requires an attached terminal at /dev/tty"
+    exec 9<>/dev/tty
+    TUI_ACTIVE=1
+    tui_setup
+  fi
+
+  while IFS= read -r file; do
+    engine=$(basename "$(dirname -- "$file")")
+    if [[ -n "$ENGINE_FILTER" && "$engine" != "$ENGINE_FILTER" ]]; then
+      continue
+    fi
+    if ((LIMIT > 0 && ${#REVIEW_FILES[@]} >= LIMIT)); then
+      break
+    fi
+    REVIEW_FILES+=("$file")
+  done < <(find "$REVIEW_DIR" \
+    -type f -name '[0-9][0-9][0-9]-*.md' | sort)
+
+  INTERACTIVE_TOTAL=${#REVIEW_FILES[@]}
+  ((INTERACTIVE_TOTAL > 0)) ||
+    die "no review Markdown files found under $REVIEW_DIR"
+
+  if [[ "$MODE" == interactive ]]; then
+    tui_banner "$(tui_progress_bar 0 "$INTERACTIVE_TOTAL")"
+  fi
+
+  for file in "${REVIEW_FILES[@]}"; do
+    if ! process_review "$file"; then
+      FAILED_REVIEWS=$((FAILED_REVIEWS + 1))
+    fi
+  done
+  if ! submit_unified_verdict; then
+    FAILED_REVIEWS=$((FAILED_REVIEWS + 1))
+  fi
+
+  if [[ "$MODE" == interactive ]]; then
+    summary_body="Reviews parsed: $TOTAL_REVIEWS"
+    summary_body+=$'\n'"Reviews skipped: $SKIPPED_REVIEWS"
+    summary_body+=$'\n'"Reviews posted: $POSTED_REVIEWS"
+    summary_body+=$'\n'"Comments skipped: $SKIPPED_COMMENTS"
+    summary_body+=$'\n'"Duplicate comments: $DUPLICATE_COMMENTS"
+    summary_body+=$'\n'"Duplicate verdicts: $DUPLICATE_VERDICTS"
+    summary_body+=$'\n'"Warnings: $WARNINGS"
+    summary_body+=$'\n'"Failures: $FAILED_REVIEWS"
+    tui_box "Run summary" info "$summary_body"
+    TUI_ACTIVE=0
+    exec 9>&-
+  else
+    printf '\nReviews parsed: %s\n' "$TOTAL_REVIEWS"
+    printf 'Reviews skipped: %s\n' "$SKIPPED_REVIEWS"
+    if [[ "$MODE" == dry-run ]]; then
+      printf 'Dry-run payloads: %s\n' "$DRY_RUN_REVIEWS"
+    else
+      printf 'Reviews posted: %s\n' "$POSTED_REVIEWS"
+      printf 'Duplicate comments: %s\n' "$DUPLICATE_COMMENTS"
+      printf 'Duplicate verdicts: %s\n' "$DUPLICATE_VERDICTS"
+    fi
+    printf 'Comments skipped: %s\n' "$SKIPPED_COMMENTS"
+    printf 'Warnings: %s\n' "$WARNINGS"
+    printf 'Failures: %s\n' "$FAILED_REVIEWS"
+  fi
+
+  ((FAILED_REVIEWS == 0))
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main
+fi

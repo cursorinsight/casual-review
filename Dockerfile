@@ -21,6 +21,7 @@ RUN chmod -R a+rX \
       /opt/casual-review/libexec/casual-review/process \
       /opt/casual-review/libexec/casual-review/gerrit/export \
       /opt/casual-review/libexec/casual-review/gerrit/upload \
-      /opt/casual-review/libexec/casual-review/gerrit/respond && \
+      /opt/casual-review/libexec/casual-review/gerrit/respond \
+      /opt/casual-review/libexec/casual-review/github/upload && \
     ln -sf /opt/casual-review/bin/casual-review \
       /usr/local/bin/casual-review

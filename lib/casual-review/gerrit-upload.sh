@@ -133,7 +133,7 @@ finish_comment() {
   COMMENT_STORED=1
 
   if [[ -z "$FINDING_COMMENT" ]]; then
-    warn "$CURRENT_FILE: skipping finding without suggested Gerrit comment"
+    warn "$CURRENT_FILE: skipping finding without suggested review comment"
     return 0
   fi
   if [[ -z "$FINDING_PATH" ]]; then
@@ -195,7 +195,7 @@ parse_review_file() {
   heading_re='^### \[([^]]+)\] (.*)$'
   location_re='^- Location: (.*)$'
   confidence_re='^- Confidence: (.*)$'
-  action_re='^- Gerrit action: (.*)$'
+  action_re='^- (Gerrit action|Review action): (.*)$'
   engine_re='^_Engine: ([^[:space:]]+)'
 
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -270,8 +270,9 @@ parse_review_file() {
           FINDING_LINE=$PARSED_LOCATION_LINE
         fi
       elif [[ $line =~ $action_re ]]; then
-        FINDING_ACTION=${BASH_REMATCH[1]}
-      elif [[ $line == "Suggested Gerrit comment:" ]]; then
+        FINDING_ACTION=${BASH_REMATCH[2]}
+      elif [[ $line == "Suggested Gerrit comment:" ||
+          $line == "Suggested review comment:" ]]; then
         COLLECT_COMMENT=1
       fi
       continue
