@@ -31,16 +31,23 @@ expect_status() {
 expect_status 0 "$CLI" --help
 grep -q '^  gerrit <command>' "$tmp/stdout" ||
   die "top-level help does not list Gerrit"
+grep -q '^  github <command>' "$tmp/stdout" ||
+  die "top-level help does not list GitHub"
 grep -q '^  completion <shell>' "$tmp/stdout" ||
   die "top-level help does not list completion generation"
 expect_status 0 "$CLI" gerrit --help
 grep -q '^  upload ' "$tmp/stdout" ||
   die "Gerrit help does not list upload"
+expect_status 0 "$CLI" github --help
+grep -q '^  upload ' "$tmp/stdout" ||
+  die "GitHub help does not list upload"
 
 expect_status 2 "$CLI"
 expect_status 2 "$CLI" unknown
 expect_status 2 "$CLI" gerrit
 expect_status 2 "$CLI" gerrit unknown
+expect_status 2 "$CLI" github
+expect_status 2 "$CLI" github unknown
 
 for command in \
   'review' \
@@ -48,7 +55,8 @@ for command in \
   'completion' \
   'gerrit export' \
   'gerrit upload' \
-  'gerrit respond'; do
+  'gerrit respond' \
+  'github upload'; do
   # Intentional word splitting: command contains dispatcher path segments.
   # shellcheck disable=SC2086
   expect_status 0 "$CLI" $command --help
@@ -62,6 +70,10 @@ expect_status 1 "$CLI" process --reviews ''
 expect_status 1 "$CLI" gerrit export --limit ''
 expect_status 1 "$CLI" gerrit upload --engine ''
 expect_status 1 "$CLI" gerrit respond --limit ''
+expect_status 1 "$CLI" github upload --pr ''
+expect_status 1 "$CLI" github upload --repo ''
+expect_status 1 "$CLI" github upload --engine ''
+expect_status 1 "$CLI" github upload --limit ''
 
 expect_status 0 "$CLI" completion bash
 bash -n "$tmp/stdout" || die "generated Bash completion is invalid"
@@ -75,6 +87,11 @@ COMP_CWORD=2
 _casual_review
 [[ "${COMPREPLY[*]}" == upload ]] ||
   die "Bash completion does not suggest Gerrit upload"
+COMP_WORDS=(casual-review github up)
+COMP_CWORD=2
+_casual_review
+[[ "${COMPREPLY[*]}" == upload ]] ||
+  die "Bash completion does not suggest GitHub upload"
 COMP_WORDS=(casual-review review --engine cod)
 COMP_CWORD=3
 _casual_review
@@ -109,8 +126,10 @@ grep -Fq "'2:reviews directory:_directories'" "$tmp/stdout" ||
   die "Zsh completion has the wrong process path position"
 grep -Fq "'3:reviews directory:_directories'" "$tmp/stdout" ||
   die "Zsh completion has the wrong Gerrit path position"
-[[ $(grep -c 'engine:(codex claude antigravity all)' "$tmp/stdout") == 3 ]] ||
-  die "Zsh completion does not suggest all Gerrit engines"
+grep -Fq "'2:GitHub command:(upload)'" "$tmp/stdout" ||
+  die "Zsh completion does not include GitHub upload"
+[[ $(grep -c 'engine:(codex claude antigravity all)' "$tmp/stdout") == 4 ]] ||
+  die "Zsh completion does not suggest all upload engines"
 if command -v zsh >/dev/null 2>&1; then
   zsh -n "$tmp/stdout" || die "generated Zsh completion is invalid"
 fi
@@ -118,8 +137,8 @@ fi
 expect_status 0 "$CLI" completion fish
 grep -q '^complete -c casual-review ' "$tmp/stdout" ||
   die "generated Fish completion has no registrations"
-[[ $(grep -c "'codex claude antigravity all'" "$tmp/stdout") == 2 ]] ||
-  die "Fish completion does not suggest all Gerrit engines"
+[[ $(grep -c "'codex claude antigravity all'" "$tmp/stdout") == 3 ]] ||
+  die "Fish completion does not suggest all upload engines"
 if command -v fish >/dev/null 2>&1; then
   fish -n "$tmp/stdout" || die "generated Fish completion is invalid"
 fi

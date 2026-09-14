@@ -123,6 +123,7 @@ require_executable libexec/casual-review/process
 require_executable libexec/casual-review/gerrit/export
 require_executable libexec/casual-review/gerrit/upload
 require_executable libexec/casual-review/gerrit/respond
+require_executable libexec/casual-review/github/upload
 require_absent bin/review-commits
 require_absent bin/process-reviews
 require_absent bin/export-gerrit-reviews
@@ -139,6 +140,7 @@ require_executable tests/process_test.sh
 require_executable tests/review_test.sh
 require_executable tests/gerrit_upload_test.sh
 require_executable tests/gerrit_respond_test.sh
+require_executable tests/github_upload_test.sh
 run_cmd "casual-review --help" bin/casual-review --help
 run_cmd "casual-review review --help" bin/casual-review review --help
 run_cmd "casual-review process --help" bin/casual-review process --help
@@ -151,6 +153,9 @@ run_cmd "casual-review gerrit upload --help" \
   bin/casual-review gerrit upload --help
 run_cmd "casual-review gerrit respond --help" \
   bin/casual-review gerrit respond --help
+run_cmd "casual-review github --help" bin/casual-review github --help
+run_cmd "casual-review github upload --help" \
+  bin/casual-review github upload --help
 run_cmd "casual-review symlink --help" "$tmp/casual-review" --help
 run_cmd "CLI tests" tests/cli_test.sh
 run_cmd "common tests" tests/common_test.sh
@@ -167,6 +172,7 @@ run_cmd "process tests" tests/process_test.sh
 run_cmd "review tests" tests/review_test.sh
 run_cmd "Gerrit upload tests" tests/gerrit_upload_test.sh
 run_cmd "Gerrit respond tests" tests/gerrit_respond_test.sh
+run_cmd "GitHub upload tests" tests/github_upload_test.sh
 
 if (( status == 0 )); then
   printf '\nAll tests passed.\n'

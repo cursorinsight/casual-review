@@ -10,6 +10,7 @@ Commands:
   review             review commits with an AI engine
   process            process generated review findings
   gerrit <command>   export, upload, or respond to Gerrit reviews
+  github <command>   upload reviews to a GitHub pull request
   completion <shell> generate Bash, Zsh, or Fish completion code
 
 Run 'casual-review <command> --help' for command-specific help.
@@ -27,6 +28,18 @@ Commands:
   respond   respond to uploaded Gerrit comments from a decision log
 
 Run 'casual-review gerrit <command> --help' for command-specific help.
+USAGE
+}
+
+github_usage() {
+  cat <<'USAGE'
+Usage:
+  casual-review github <command> [options]
+
+Commands:
+  upload    upload generated reviews to a GitHub pull request
+
+Run 'casual-review github <command> --help' for command-specific help.
 USAGE
 }
 
@@ -88,6 +101,24 @@ case "${1-}" in
         ;;
       *)
         die_with_usage "unknown Gerrit command: $1" gerrit_usage
+        ;;
+    esac
+    ;;
+  github)
+    shift
+    case "${1-}" in
+      upload)
+        shift
+        run_leaf "github/upload" "$@"
+        ;;
+      -h|--help)
+        github_usage
+        ;;
+      '')
+        die_with_usage "GitHub command is required" github_usage
+        ;;
+      *)
+        die_with_usage "unknown GitHub command: $1" github_usage
         ;;
     esac
     ;;

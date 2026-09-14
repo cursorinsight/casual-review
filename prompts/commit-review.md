@@ -25,14 +25,15 @@ that files in the working tree represent their state at the reviewed commit.
 Important constraints:
 
 - Do not modify files, Git refs, the index, or the working tree.
-- Do not run builds, tests, package managers, network commands, or generated code.
+- Do not run builds, tests, package managers, network commands, or generated
+  code.
 - Do not review unrelated later changes merely because the checkout is at HEAD.
 - Distinguish problems introduced by this commit from pre-existing problems.
 - Avoid speculative findings and personal style preferences.
 - Ignore formatting and issues already reliably enforced by linters.
 - False positives are more harmful than missing minor issues.
 - If confidence is below 70%, report the item as a question, not a finding.
-- Only recommend a Gerrit comment if you would personally post it in a real review.
+- Only recommend a comment if you would personally post it in a real review.
 
 Check especially for:
 
@@ -73,11 +74,11 @@ For every likely real issue use:
 - Confidence: High / Medium
 - Location: `path/to/file:line`
 - Introduced by this commit: Yes / Probably
-- Gerrit action: Must fix / Should fix / Consider
+- Review action: Must fix / Should fix / Consider
 
 Explain the problem, why it matters, and a suggested fix.
 
-Suggested Gerrit comment:
+Suggested review comment:
 
 > Concise, objective, technically justified comment suitable for posting.
 
@@ -85,7 +86,7 @@ Use severity Critical, Major, or Minor.
 
 If there are no findings, write exactly:
 
-No findings worth posting to Gerrit.
+No findings worth posting.
 
 ## Questions
 

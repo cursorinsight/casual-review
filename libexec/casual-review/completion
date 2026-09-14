@@ -22,7 +22,7 @@ _casual_review() {
   action=${COMP_WORDS[2]-}
 
   if (( COMP_CWORD == 1 )); then
-    values='review process gerrit completion -h --help'
+    values='review process gerrit github completion -h --help'
     # Intentional word splitting for completion candidates.
     # shellcheck disable=SC2207
     COMPREPLY=($(compgen -W "$values" -- "$cur"))
@@ -36,6 +36,12 @@ _casual_review() {
     return
   fi
 
+  if [[ "$command" == github && $COMP_CWORD == 2 ]]; then
+    # shellcheck disable=SC2207
+    COMPREPLY=($(compgen -W 'upload -h --help' -- "$cur"))
+    return
+  fi
+
   if [[ "$command" == completion && $COMP_CWORD == 2 ]]; then
     # shellcheck disable=SC2207
     COMPREPLY=($(compgen -W 'bash zsh fish -h --help' -- "$cur"))
@@ -46,7 +52,9 @@ _casual_review() {
     --engine)
       values='codex claude antigravity'
       case "$command:$action" in
-        review:*|gerrit:export|gerrit:upload) values="$values all" ;;
+        review:*|gerrit:export|gerrit:upload|github:upload)
+          values="$values all"
+          ;;
       esac
       # shellcheck disable=SC2207
       COMPREPLY=($(compgen -W "$values" -- "$cur"))
@@ -73,7 +81,7 @@ _casual_review() {
       COMPREPLY=($(compgen -W "$refs" -- "$cur"))
       return
       ;;
-    --limit|--model|--effort)
+    --limit|--model|--effort|--pr|--repo)
       return
       ;;
   esac
@@ -96,6 +104,10 @@ _casual_review() {
     gerrit:respond)
       options='--dry-run --interactive --yolo --limit -h --help'
       ;;
+    github:upload)
+      options='--dry-run --interactive --yolo --pr --repo --engine
+        --limit -h --help'
+      ;;
     completion:*)
       options='-h --help'
       ;;
@@ -111,7 +123,7 @@ _casual_review() {
   fi
 
   case "$command:$action" in
-    process:*|gerrit:export|gerrit:upload)
+    process:*|gerrit:export|gerrit:upload|github:upload)
       while IFS= read -r value; do
         COMPREPLY+=("$value")
       done < <(compgen -d -- "$cur")
@@ -203,6 +215,22 @@ _casual_review_gerrit_respond() {
     '4:decisions file:_files'
 }
 
+_casual_review_github_upload() {
+  _arguments \
+    '--dry-run[print reviews without calling GitHub]' \
+    '--interactive[confirm each comment and verdict]' \
+    '--yolo[submit all comments and verdicts]' \
+    '--pr[select pull request]:pull request:' \
+    '--repo[select repository]:repository:' \
+    '--engine[filter engine]:engine:(codex claude antigravity all)' \
+    '--limit[limit review files]:count:' \
+    '(-h --help)-h[show help]' \
+    '(-h --help)--help[show help]' \
+    '1:command:(github)' \
+    '2:GitHub command:(upload)' \
+    '3:reviews directory:_directories'
+}
+
 _casual_review_completion() {
   _arguments \
     '(-h --help)-h[show help]' \
@@ -213,12 +241,13 @@ _casual_review_completion() {
 
 _casual_review() {
   local action
-  local -a commands gerrit_commands
+  local -a commands gerrit_commands github_commands
 
   commands=(
     'review:review commits with an AI engine'
     'process:process generated review findings'
     'gerrit:operate on Gerrit reviews'
+    'github:operate on GitHub reviews'
     'completion:generate shell completion code'
     '-h:show help'
     '--help:show help'
@@ -227,6 +256,11 @@ _casual_review() {
     'export:export compressed browser upload bundles'
     'upload:upload generated reviews through the REST API'
     'respond:respond to uploaded comments from a decision log'
+    '-h:show help'
+    '--help:show help'
+  )
+  github_commands=(
+    'upload:upload reviews to a pull request'
     '-h:show help'
     '--help:show help'
   )
@@ -256,6 +290,16 @@ _casual_review() {
         export) _casual_review_gerrit_export ;;
         upload) _casual_review_gerrit_upload ;;
         respond) _casual_review_gerrit_respond ;;
+      esac
+      ;;
+    github)
+      if (( CURRENT == 3 )); then
+        _describe 'GitHub command' github_commands
+        return
+      fi
+      action=$words[3]
+      case $action in
+        upload) _casual_review_github_upload ;;
       esac
       ;;
   esac
@@ -289,12 +333,26 @@ function __casual_review_gerrit_uses
   and test "$tokens[3]" = "$argv[1]"
 end
 
+function __casual_review_github_needs_command
+  set -l tokens (commandline -opc)
+  test (count $tokens) -eq 2; and test "$tokens[2]" = github
+end
+
+function __casual_review_github_uses
+  set -l tokens (commandline -opc)
+  test (count $tokens) -ge 3
+  and test "$tokens[2]" = github
+  and test "$tokens[3]" = "$argv[1]"
+end
+
 complete -c casual-review -n __casual_review_needs_command -f \
   -a review -d 'Review commits with an AI engine'
 complete -c casual-review -n __casual_review_needs_command -f \
   -a process -d 'Process generated review findings'
 complete -c casual-review -n __casual_review_needs_command -f \
   -a gerrit -d 'Operate on Gerrit reviews'
+complete -c casual-review -n __casual_review_needs_command -f \
+  -a github -d 'Operate on GitHub reviews'
 complete -c casual-review -n __casual_review_needs_command -f \
   -a completion -d 'Generate shell completion code'
 complete -c casual-review -n __casual_review_needs_command \
@@ -307,6 +365,11 @@ complete -c casual-review -n __casual_review_gerrit_needs_command -f \
 complete -c casual-review -n __casual_review_gerrit_needs_command -f \
   -a respond -d 'Respond to uploaded Gerrit comments'
 complete -c casual-review -n __casual_review_gerrit_needs_command \
+  -s h -l help -d 'Show help'
+
+complete -c casual-review -n __casual_review_github_needs_command -f \
+  -a upload -d 'Upload reviews to a pull request'
+complete -c casual-review -n __casual_review_github_needs_command \
   -s h -l help -d 'Show help'
 
 complete -c casual-review -n '__casual_review_uses completion' -f \
@@ -374,6 +437,26 @@ for action in upload respond
     -l yolo -d 'Post all actions'
 end
 
+complete -c casual-review \
+  -n '__casual_review_github_uses upload' -l engine -r \
+  -f -a 'codex claude antigravity all' -d 'Filter engine'
+complete -c casual-review \
+  -n '__casual_review_github_uses upload' -l limit -r \
+  -d 'Limit review files'
+complete -c casual-review \
+  -n '__casual_review_github_uses upload' -l pr -r \
+  -d 'Select pull request'
+complete -c casual-review \
+  -n '__casual_review_github_uses upload' -l repo -r \
+  -d 'Select repository'
+complete -c casual-review -n '__casual_review_github_uses upload' \
+  -a '(__fish_complete_directories)'
+
+for mode in dry-run interactive yolo
+  complete -c casual-review \
+    -n '__casual_review_github_uses upload' -l "$mode"
+end
+
 for command in review process completion
   complete -c casual-review -n "__casual_review_uses $command" \
     -s h -l help -d 'Show help'
@@ -384,6 +467,9 @@ for action in export upload respond
     -n "__casual_review_gerrit_uses $action" \
     -s h -l help -d 'Show help'
 end
+
+complete -c casual-review -n '__casual_review_github_uses upload' \
+  -s h -l help -d 'Show help'
 FISH
 }
 

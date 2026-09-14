@@ -96,6 +96,7 @@ shellcheck_files=(
   libexec/casual-review/review
   libexec/casual-review/process
   libexec/casual-review/gerrit/*
+  libexec/casual-review/github/*
   tests/*.sh
 )
 hadolint_files=(Dockerfile)

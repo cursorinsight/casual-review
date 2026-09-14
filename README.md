@@ -51,6 +51,7 @@ casual-review completion bash|zsh|fish
 casual-review gerrit export
 casual-review gerrit upload
 casual-review gerrit respond
+casual-review github upload
 ```
 
 ## Shell Completion
@@ -135,7 +136,7 @@ Set `CASUAL_REVIEW_ENGINE` to choose the default engine without a flag.
 
 `casual-review gerrit upload` reads a generated `ai-reviews` directory and
 uploads the per-commit findings to Gerrit with its REST API. It posts inline
-comments from each `Suggested Gerrit comment:` block and posts the review
+comments from each `Suggested review comment:` block and posts the review
 verdict as the change message.
 
 Dry-run is the default and makes no HTTP requests:
@@ -333,6 +334,71 @@ The default review directory is `./ai-reviews`, and the default decisions file
 is `./ai-reviews/DECISIONS.md`. Pass a review directory to use its
 `DECISIONS.md`; pass both paths only when the decision log lives elsewhere.
 
+## Uploading to GitHub
+
+`casual-review github upload` submits generated findings as pull-request
+reviews through the GitHub CLI. Dry-run is the default and does not invoke
+`gh`:
+
+```bash
+casual-review github upload
+casual-review github upload --dry-run ./reviews
+```
+
+For real uploads, install `gh`, set `GITHUB_TOKEN` or `GH_TOKEN`, or log in
+with `gh auth login`. The token needs write access to pull requests.
+
+```bash
+export GITHUB_TOKEN='<token>'
+casual-review github upload --interactive
+casual-review github upload --yolo
+```
+
+By default, `gh pr view` selects the pull request for the current branch. Use
+`--pr` with a pull-request number, URL, or branch, and `--repo` when operating
+outside the repository selected by the current checkout:
+
+```bash
+casual-review github upload --pr 123 --repo owner/repository --yolo
+```
+
+Inline comments from each review file are submitted as one atomic `COMMENT`
+review against its recorded commit. The commit must belong to the selected
+pull request. GitHub only accepts batched inline comments on lines in the
+pull-request diff, so findings without a line number are skipped. Locations
+use the reviewed file's post-commit line on the `RIGHT` side. If GitHub rejects
+any location, it rejects that commit's review request without partially
+posting its other comments.
+
+Selected verdicts are accumulated across all processed review files. After
+the inline comments, the uploader submits one unified verdict pinned to the
+pull-request head captured at startup. It refuses the verdict if the head
+changes before submission. The strictest selected verdict wins, so a later
+clean commit cannot override an earlier request for changes. In strictness
+order: `Reject`, `Needs changes`, `Looks good with minor comments`, then
+`LGTM`.
+
+An `APPROVE` verdict additionally requires selected verdicts for every commit
+currently in the pull request. Partial selections such as `--limit 1` fail
+instead of approving unreviewed commits. Dry-run stays network-free, so it
+prints the prospective verdict without remote head or coverage validation.
+
+Verdicts map to GitHub review events as follows:
+
+- `Reject` and `Needs changes`: `REQUEST_CHANGES`
+- `Looks good with minor comments`: `COMMENT`
+- `LGTM`: `APPROVE`
+
+Before posting, the uploader loads existing reviews and inline comments.
+Exact duplicates for the same engine, commit, path, and line are skipped, as
+is an identical unified verdict. `--interactive` uses the same terminal UI as
+the Gerrit uploader and confirms the final unified verdict separately.
+
+GitHub review creation and line-location constraints are documented in the
+[pull-request review API](https://docs.github.com/en/rest/pulls/reviews).
+Authentication behavior comes from
+[GitHub CLI](https://cli.github.com/manual/gh_help_environment).
+
 ## Authentication
 
 Log in to each CLI normally before running the batch. The script reuses the
@@ -368,8 +434,8 @@ ANTIGRAVITY_MODEL='<model>' ANTIGRAVITY_EFFORT='<level>' \
 ```
 
 `CASUAL_REVIEW_ENGINE` also supplies the default `--engine` filter for Gerrit
-export and upload commands. An explicit `--engine` always overrides it. Use
-`all` or leave the filter unset to include every engine.
+export/upload and GitHub upload commands. An explicit `--engine` always
+overrides it. Use `all` or leave the filter unset to include every engine.
 
 Valid effort levels are engine-specific (e.g. Claude accepts `low`, `medium`,
 `high`, `xhigh`, `max`; Antigravity accepts `low`, `medium`, `high`); the
