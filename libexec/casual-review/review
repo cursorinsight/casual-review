@@ -9,7 +9,8 @@ Usage:
 Options:
   --engine NAME       codex, claude, antigravity, or all
                       (default: CASUAL_REVIEW_ENGINE or codex)
-  --base REF          base ref (default: origin/master)
+  --base REF          base ref
+                      (default: detected origin/master or origin/main)
   --head REF          head ref (default: HEAD)
   --output DIR        output directory (default: ai-reviews)
   --prompt FILE       commit prompt template
@@ -71,7 +72,8 @@ engine_effort() {
 
 PACKAGE_DIR=$CASUAL_REVIEW_ROOT
 ENGINE=${CASUAL_REVIEW_ENGINE:-codex}
-BASE_REF=origin/master
+BASE_REF=
+BASE_REF_SET=0
 HEAD_REF=HEAD
 OUTPUT_DIR=ai-reviews
 PROMPT_FILE="$PACKAGE_DIR/prompts/commit-review.md"
@@ -92,6 +94,7 @@ while (($#)); do
     --base)
       cli_require_value "$1" "${2-}" "$#"
       BASE_REF=$2
+      BASE_REF_SET=1
       shift 2
       ;;
     --head)
@@ -154,6 +157,28 @@ need git
 [[ -r "$SUMMARY_PROMPT" ]] || die "summary prompt not readable: $SUMMARY_PROMPT"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
   die "run inside a Git repository"
+if ((BASE_REF_SET == 0)); then
+  origin_head=$(git symbolic-ref --quiet --short \
+    refs/remotes/origin/HEAD 2>/dev/null || :)
+  case "$origin_head" in
+    origin/master|origin/main)
+      if git rev-parse --verify \
+          "${origin_head}^{commit}" >/dev/null 2>&1; then
+        BASE_REF=$origin_head
+      fi
+      ;;
+  esac
+  if [[ -z "$BASE_REF" ]] &&
+      git rev-parse --verify "origin/master^{commit}" >/dev/null 2>&1; then
+    BASE_REF=origin/master
+  elif [[ -z "$BASE_REF" ]] &&
+      git rev-parse --verify "origin/main^{commit}" >/dev/null 2>&1; then
+    BASE_REF=origin/main
+  fi
+  [[ -n "$BASE_REF" ]] ||
+    die "could not detect base: origin/master and origin/main are missing;" \
+      "use --base REF"
+fi
 git rev-parse --verify "${BASE_REF}^{commit}" >/dev/null 2>&1 ||
   die "invalid base: $BASE_REF"
 git rev-parse --verify "${HEAD_REF}^{commit}" >/dev/null 2>&1 ||

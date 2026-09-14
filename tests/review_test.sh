@@ -23,8 +23,11 @@ die() {
 tmp=$(mktemp -d)
 repo=$tmp/repo
 out=$tmp/out
+default_out=$tmp/default-out
 fake_claude=$tmp/claude
 log=$tmp/review.log
+default_log=$tmp/default.log
+missing_log=$tmp/missing.log
 
 mkdir -p "$repo"
 (
@@ -45,6 +48,33 @@ printf '{invalid'
 exit 0
 EOF_CLAUDE
 chmod +x "$fake_claude"
+
+git -C "$repo" update-ref refs/remotes/origin/main HEAD~1
+if (
+    cd "$repo"
+    CASUAL_REVIEW_ENGINE=claude \
+    CLAUDE_BIN="$fake_claude" \
+    "$ROOT_DIR/bin/casual-review" review \
+      --head HEAD \
+      --output "$default_out" \
+      --skip-summary
+  ) >/dev/null 2>"$default_log";
+then
+  die "review accepted invalid Claude JSON with detected base"
+fi
+grep -Fq -- "- Base: \`origin/main\`" "$default_out/README.md" ||
+  die "review did not detect origin/main"
+
+git -C "$repo" update-ref -d refs/remotes/origin/main
+if (
+    cd "$repo"
+    "$ROOT_DIR/bin/casual-review" review --skip-summary
+  ) >/dev/null 2>"$missing_log";
+then
+  die "review accepted missing default base refs"
+fi
+grep -q 'could not detect base' "$missing_log" ||
+  die "review did not explain missing default base refs"
 
 if (
     cd "$repo"

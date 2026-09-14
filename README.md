@@ -45,10 +45,13 @@ Extract this package, enter the repository to review, then run:
 ```bash
 /path/to/casual-review/bin/casual-review review \
   --engine all \
-  --base origin/master \
   --head HEAD \
   --output ./ai-reviews
 ```
+
+Without `--base`, the command uses `origin/HEAD` when it points to
+`origin/master` or `origin/main`, then falls back to an existing ref with
+`origin/master` preferred. Pass `--base REF` to bypass detection.
 
 Start with three commits to tune output and cost:
 
@@ -618,8 +621,9 @@ make clean
 - Merge commits are compared with their first parent and trigger a warning.
 - The script deliberately performs static review only. Testing historical
   commits requires isolated worktrees and a project-specific test strategy.
-- `origin/master..HEAD` means commits reachable from `HEAD` but not from
-  `origin/master`. Fetch first when the remote-tracking ref may be stale.
+- `origin/master..HEAD` or `origin/main..HEAD` means commits reachable from
+  `HEAD` but not from the selected base. Fetch first when the remote-tracking
+  ref may be stale.
 - Running all three engines triples the number of model calls, plus one summary.
 
 
