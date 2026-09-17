@@ -14,6 +14,10 @@ Commands:
   completion <shell> generate Bash, Zsh, or Fish completion code
 
 Run 'casual-review <command> --help' for command-specific help.
+
+Environment:
+  CASUAL_REVIEW_USE_CAPSULE  run review and process inside Capsule when set
+  CAPSULE_BIN                Capsule executable (default: capsule)
 USAGE
 }
 
@@ -79,11 +83,45 @@ run_leaf() {
   exec "$path" "$@"
 }
 
+running_inside_capsule() {
+  [[ -n "${CAPSULE_HOST_WORKDIR:-}" ]]
+}
+
+run_agent_leaf() {
+  local leaf=$1
+  local capsule_bin=${CAPSULE_BIN:-capsule}
+  local compose_file
+
+  shift
+  if [[ -z "${CASUAL_REVIEW_USE_CAPSULE:-}" ]] ||
+      running_inside_capsule || [[ "${1-}" == -h ]] ||
+      [[ "${1-}" == --help ]]; then
+    run_leaf "$leaf" "$@"
+  fi
+
+  compose_file=$CASUAL_REVIEW_ROOT/compose.yml
+  [[ -r "$compose_file" ]] || {
+    printf 'Error: Capsule compose file is not readable: %s\n' \
+      "$compose_file" >&2
+    exit 1
+  }
+  command -v "$capsule_bin" >/dev/null 2>&1 || {
+    printf 'Error: Capsule executable not found: %s\n' "$capsule_bin" >&2
+    exit 1
+  }
+  export CAPSULE_CUSTOM_COMPOSE=$compose_file
+  exec "$capsule_bin" casual-review "$leaf" "$@"
+}
+
 case "${1-}" in
-  review|process|completion)
+  review|process)
     leaf=$1
     shift
-    run_leaf "$leaf" "$@"
+    run_agent_leaf "$leaf" "$@"
+    ;;
+  completion)
+    shift
+    run_leaf completion "$@"
     ;;
   gerrit)
     shift
