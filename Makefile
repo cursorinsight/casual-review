@@ -7,41 +7,39 @@ LABELS_JSON_JQ += error("GERRIT_LABELS_JSON must be an object") end
 
 require = $(if $(strip $($(1))),,$(error $(1) is required))
 
-.PHONY: browser-artifacts
-browser-artifacts: userscript gerrit-plugin
+.PHONY: help
+help: ## Show this help.
+	@awk 'BEGIN {FS = ":.*##[[:space:]]*"} \
+	  /^[[:alnum:]_-]+:.*##/ {printf "  %-24s %s\n", $$1, $$2}' \
+	  $(MAKEFILE_LIST)
 
-.PHONY: browser-labels
-browser-labels:
-	@if [ -z "$${GERRIT_LABELS_JSON:-}" ]; then \
-	  printf '%s\n' \
-		'Warning: GERRIT_LABELS_JSON is undefined; browser labels disabled' \
-		>&2; \
-	fi
+.PHONY: browser-artifacts
+browser-artifacts: userscript gerrit-plugin  ## Build browser scripts.
 
 .PHONY: clean
-clean:
+clean: ## Remove generated browser scripts.
 	@rm -f -- "$(USER_SCRIPT)" "$(GERRIT_PLUGIN)"
 
 .PHONY: mrproper
-mrproper: clean
+mrproper: clean  ## Remove generated scripts, dependencies, and test output.
 	@rm -rf -- node_modules playwright/test-results \
 	  playwright/playwright-report playwright/.auth
 
 .PHONY: check
-check:
+check: ## Run linters and static checks.
 	@./tests/check_all.sh
 
 .PHONY: test
-test:
+test: ## Run test suites.
 	@./tests/test_all.sh
 
 .PHONY: install-deps
-install-deps:
+install-deps: ## Install Node.js and Playwright dependencies.
 	@npm ci
 	@npx playwright install chromium
 
 .PHONY: login
-login:
+login: ## Save a Gerrit login session for browser tests.
 	$(call require,GERRIT_URL)
 	@gerrit_url="$(GERRIT_URL)"; \
 	mkdir -p playwright/.auth; \
@@ -50,7 +48,7 @@ login:
 	  "$${gerrit_url%/}/login/"
 
 .PHONY: test-gerrit-browser
-test-gerrit-browser:
+test-gerrit-browser: ## Run browser tests against Gerrit.
 	$(call require,GERRIT_URL)
 	$(call require,GERRIT_TEST_PROJECT)
 	$(call require,GERRIT_E2E_ALLOW_WRITES)
@@ -62,7 +60,7 @@ test-gerrit-browser:
 	@npm run test:gerrit-browser
 
 .PHONY: userscript
-userscript: browser-labels
+userscript: browser-labels  ## Generate the Tampermonkey userscript.
 	$(call require,GERRIT_URL)
 	@mkdir -p "$(dir $(USER_SCRIPT))"
 	@labels_json="$${GERRIT_LABELS_JSON:-}"; \
@@ -95,7 +93,7 @@ userscript: browser-labels
 	} >"$(USER_SCRIPT)"
 
 .PHONY: gerrit-plugin
-gerrit-plugin: browser-labels
+gerrit-plugin: browser-labels  ## Generate the Gerrit plugin.
 	@mkdir -p "$(dir $(GERRIT_PLUGIN))"
 	@labels_json="$${GERRIT_LABELS_JSON:-}"; \
 	if [ -z "$$labels_json" ]; then labels_json='{}'; fi; \
@@ -122,7 +120,7 @@ gerrit-plugin: browser-labels
 	} >"$(GERRIT_PLUGIN)"
 
 .PHONY: check-browser-artifacts
-check-browser-artifacts:
+check-browser-artifacts: ## Validate generated browser scripts.
 	@tmp=$$(mktemp -d); \
 	trap 'rm -rf "$$tmp"' EXIT INT HUP TERM; \
 	gerrit_url="$(GERRIT_URL)"; \
@@ -151,4 +149,16 @@ check-browser-artifacts:
 	fi; \
 	if [ -r "$(GERRIT_PLUGIN)" ]; then \
 	  diff -u "$(GERRIT_PLUGIN)" "$$tmp/casual-review-upload.js"; \
+	fi
+
+# -----------------------------------------------------------------------------
+# Internal targets
+# -----------------------------------------------------------------------------
+
+.PHONY: browser-labels
+browser-labels:
+	@if [ -z "$${GERRIT_LABELS_JSON:-}" ]; then \
+	  printf '%s\n' \
+		'Warning: GERRIT_LABELS_JSON is undefined; browser labels disabled' \
+		>&2; \
 	fi
