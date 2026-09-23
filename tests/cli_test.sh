@@ -42,6 +42,98 @@ expect_status 0 "$CLI" github --help
 grep -q '^  upload ' "$tmp/stdout" ||
   die "GitHub help does not list upload"
 
+capsule_bin=$tmp/capsule
+capsule_log=$tmp/capsule.log
+other_compose=$tmp/compose.yml
+touch "$other_compose"
+cat >"$capsule_bin" <<'EOF_CAPSULE'
+#!/usr/bin/env bash
+{
+  printf 'compose=%s\n' "${CAPSULE_CUSTOM_COMPOSE:-}"
+  printf 'engine=%s\n' "${CASUAL_REVIEW_ENGINE:-}"
+  printf 'effort=%s\n' "${CODEX_EFFORT:-}"
+  printf 'arg=%s\n' "$@"
+} >"$CAPSULE_LOG"
+EOF_CAPSULE
+chmod 755 "$capsule_bin"
+
+expect_status 0 env \
+  CASUAL_REVIEW_USE_CAPSULE=1 \
+  CAPSULE_HOST_WORKDIR= \
+  CAPSULE_CUSTOM_COMPOSE="$other_compose" \
+  CAPSULE_BIN="$capsule_bin" \
+  CAPSULE_LOG="$capsule_log" \
+  CASUAL_REVIEW_ENGINE=claude \
+  CODEX_EFFORT=xhigh \
+  "$CLI" review --limit 2
+grep -Fqx "compose=$ROOT_DIR/compose.yml" "$capsule_log" ||
+  die "review did not select the package Capsule compose file"
+grep -Fqx 'engine=claude' "$capsule_log" ||
+  die "review did not preserve CASUAL_REVIEW_ENGINE"
+grep -Fqx 'effort=xhigh' "$capsule_log" ||
+  die "review did not preserve CODEX_EFFORT"
+review_args=$'arg=casual-review\narg=review\narg=--limit\narg=2'
+[[ $(grep '^arg=' "$capsule_log") == "$review_args" ]] ||
+  die "review did not preserve arguments through Capsule"
+
+expect_status 0 env \
+  CASUAL_REVIEW_USE_CAPSULE=1 \
+  CAPSULE_HOST_WORKDIR= \
+  CAPSULE_BIN="$capsule_bin" \
+  CAPSULE_LOG="$capsule_log" \
+  "$CLI" process --reviews reviews
+process_args=$'arg=casual-review\narg=process\narg=--reviews\narg=reviews'
+[[ $(grep '^arg=' "$capsule_log") == "$process_args" ]] ||
+  die "process did not preserve arguments through Capsule"
+
+rm -f -- "$capsule_log"
+expect_status 0 env \
+  CASUAL_REVIEW_USE_CAPSULE=1 \
+  CAPSULE_HOST_WORKDIR= \
+  CAPSULE_BIN="$capsule_bin" \
+  CAPSULE_LOG="$capsule_log" \
+  "$CLI" review --help
+[[ ! -e "$capsule_log" ]] ||
+  die "review --help entered Capsule"
+
+expect_status 0 env \
+  CASUAL_REVIEW_USE_CAPSULE=1 \
+  CAPSULE_HOST_WORKDIR= \
+  CAPSULE_BIN="$capsule_bin" \
+  CAPSULE_LOG="$capsule_log" \
+  "$CLI" gerrit respond --help
+[[ ! -e "$capsule_log" ]] ||
+  die "plain Bash command entered Capsule"
+
+expect_status 1 env \
+  CASUAL_REVIEW_USE_CAPSULE=1 \
+  CAPSULE_HOST_WORKDIR=/host/repository \
+  CAPSULE_BIN="$capsule_bin" \
+  CAPSULE_LOG="$capsule_log" \
+  "$CLI" review --engine ''
+[[ ! -e "$capsule_log" ]] ||
+  die "review nested an existing Capsule"
+
+expect_status 1 env \
+  CASUAL_REVIEW_USE_CAPSULE=1 \
+  CAPSULE_HOST_WORKDIR= \
+  CAPSULE_BIN="$tmp/missing-capsule" \
+  "$CLI" review --limit 1
+grep -q 'Capsule executable not found' "$tmp/stderr" ||
+  die "missing Capsule executable was not reported"
+
+for name in \
+  CASUAL_REVIEW_USE_CAPSULE CASUAL_REVIEW_ENGINE \
+  CODEX_BIN CLAUDE_BIN ANTIGRAVITY_BIN \
+  CODEX_MODEL CLAUDE_MODEL ANTIGRAVITY_MODEL \
+  CODEX_EFFORT CLAUDE_EFFORT ANTIGRAVITY_EFFORT \
+  CODEX_EXTRA_ARGS CLAUDE_EXTRA_ARGS ANTIGRAVITY_EXTRA_ARGS \
+  SUMMARY_ENGINE OPENAI_API_KEY ANTHROPIC_API_KEY \
+  GOOGLE_API_KEY GEMINI_API_KEY; do
+  grep -Eq "^[[:space:]]+- ${name}$" "$ROOT_DIR/compose.yml" ||
+    die "compose.yml does not forward $name"
+done
+
 expect_status 2 "$CLI"
 expect_status 2 "$CLI" unknown
 expect_status 2 "$CLI" gerrit

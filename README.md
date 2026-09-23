@@ -528,6 +528,32 @@ This project's `Dockerfile` and `compose.yml` plug into
 `CAPSULE_CUSTOM_COMPOSE` custom-image mechanism directly — point it at this
 checkout, no copying into the Capsule checkout required:
 
+Set `CASUAL_REVIEW_USE_CAPSULE=1` to make `casual-review review` and
+`casual-review process` enter Capsule automatically. The dispatcher detects an
+existing Capsule and avoids nesting. Other subcommands continue to run on the
+host.
+
+Build the custom image once, then enable automatic execution:
+
+```bash
+CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
+    capsule --build-custom
+export CASUAL_REVIEW_USE_CAPSULE=1
+
+casual-review review --engine claude
+casual-review process --engine codex
+```
+
+The automatic wrapper uses `capsule` from `PATH`. Set `CAPSULE_BIN` to another
+executable path. It always sets `CAPSULE_CUSTOM_COMPOSE` to this package's
+`compose.yml`, replacing any ambient value from the repository being reviewed.
+
+The compose override forwards the engine, model, effort, extra-argument, and
+summary environment variables documented above. It also forwards the API keys
+used by `--use-credits`. CLI options are preserved unchanged.
+
+Manual Capsule invocation remains available:
+
 ```bash
 CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
     /path/to/casual-capsule/capsule.sh casual-review review \

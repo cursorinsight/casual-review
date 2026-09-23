@@ -4,3 +4,23 @@ services:
     build:
       context: ${CAPSULE_CUSTOM_DIR}
       dockerfile: ${CAPSULE_CUSTOM_DIR}/Dockerfile
+    environment:
+      - CASUAL_REVIEW_USE_CAPSULE
+      - CASUAL_REVIEW_ENGINE
+      - CODEX_BIN
+      - CLAUDE_BIN
+      - ANTIGRAVITY_BIN
+      - CODEX_MODEL
+      - CLAUDE_MODEL
+      - ANTIGRAVITY_MODEL
+      - CODEX_EFFORT
+      - CLAUDE_EFFORT
+      - ANTIGRAVITY_EFFORT
+      - CODEX_EXTRA_ARGS
+      - CLAUDE_EXTRA_ARGS
+      - ANTIGRAVITY_EXTRA_ARGS
+      - SUMMARY_ENGINE
+      - OPENAI_API_KEY
+      - ANTHROPIC_API_KEY
+      - GOOGLE_API_KEY
+      - GEMINI_API_KEY
