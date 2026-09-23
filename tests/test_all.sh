@@ -10,6 +10,14 @@ cd "$ROOT_DIR" || exit 1
 status=0
 tmp=
 labels_json='{"Needs changes":{"AI-Review":-1}}'
+PASS_MARK=.
+PASS_COUNT=0
+FAIL_COUNT=0
+SKIP_COUNT=0
+
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  PASS_MARK=$'\033[32m.\033[0m'
+fi
 
 # shellcheck disable=SC2317,SC2329
 cleanup() {
@@ -20,16 +28,14 @@ cleanup() {
 
 trap cleanup EXIT
 
-section() {
-  printf '\n== %s ==\n' "$*"
-}
-
 pass() {
-  printf 'ok - %s\n' "$*"
+  printf '%s' "$PASS_MARK"
+  PASS_COUNT=$((PASS_COUNT + 1))
 }
 
 fail() {
-  printf 'not ok - %s\n' "$*" >&2
+  printf '\nFAIL: %s\n' "$*" >&2
+  FAIL_COUNT=$((FAIL_COUNT + 1))
   status=1
 }
 
@@ -65,27 +71,31 @@ require_absent() {
 
 run_cmd() {
   local name=$1
+  local output
 
   shift
-  if "$@" >/dev/null; then
+  if output=$("$@" 2>&1); then
     pass "$name"
   else
     fail "$name"
+    [[ -z "$output" ]] || printf '%s\n' "$output" >&2
   fi
 }
 
 reject_cmd() {
   local name=$1
+  local output
 
   shift
-  if "$@" >/dev/null 2>&1; then
+  if output=$("$@" 2>&1); then
     fail "$name"
+    [[ -z "$output" ]] || printf '%s\n' "$output" >&2
   else
     pass "$name"
   fi
 }
 
-section "Sanity"
+printf 'tests: '
 tmp=$(mktemp -d) || exit 1
 ln -s "$ROOT_DIR/bin/casual-review" "$tmp/casual-review"
 run_cmd "browser artifacts can be cleaned" make clean
@@ -174,10 +184,7 @@ run_cmd "Gerrit upload tests" tests/gerrit_upload_test.sh
 run_cmd "Gerrit respond tests" tests/gerrit_respond_test.sh
 run_cmd "GitHub upload tests" tests/github_upload_test.sh
 
-if (( status == 0 )); then
-  printf '\nAll tests passed.\n'
-else
-  printf '\nTests failed.\n' >&2
-fi
+printf '\nSummary: %d passed, %d failed, %d skipped\n' \
+  "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT"
 
 exit "$status"

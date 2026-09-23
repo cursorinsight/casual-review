@@ -636,6 +636,10 @@ Run local linters with:
 back to Docker. CI runs hadolint and shellcheck as separate checker steps and
 calls only `test_all.sh` from the test job.
 
+Both runners print `.` for a pass and `s` for a skipped check, followed by a
+numeric summary. Failure details and captured command output are printed only
+when a check fails.
+
 Remove generated browser artifacts with:
 
 ```bash
