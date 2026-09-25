@@ -7,6 +7,9 @@ ROOT_DIR=$(
 CLI=$ROOT_DIR/bin/casual-review
 tmp=$(mktemp -d)
 
+# Tests opt into Capsule and profiles explicitly where needed.
+unset CASUAL_REVIEW_USE_CAPSULE CAPSULE_PROFILES
+
 cleanup() {
   rm -rf -- "$tmp"
 }
