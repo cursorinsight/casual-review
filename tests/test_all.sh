@@ -7,6 +7,9 @@ ROOT_DIR="$(
 
 cd "$ROOT_DIR" || exit 1
 
+# Tests enable Capsule explicitly when it is part of the behavior under test.
+unset CASUAL_REVIEW_USE_CAPSULE CAPSULE_PROFILES
+
 status=0
 tmp=
 labels_json='{"Needs changes":{"AI-Review":-1}}'
@@ -170,7 +173,9 @@ run_cmd "casual-review github --help" bin/casual-review github --help
 run_cmd "casual-review github upload --help" \
   bin/casual-review github upload --help
 run_cmd "casual-review symlink --help" "$tmp/casual-review" --help
-run_cmd "CLI tests" tests/cli_test.sh
+run_cmd "CLI tests ignore ambient Capsule mode" \
+  env CASUAL_REVIEW_USE_CAPSULE=1 CAPSULE_PROFILES=/invalid \
+    tests/cli_test.sh
 run_cmd "common tests" tests/common_test.sh
 run_cmd "tui tests" tests/tui_test.sh
 run_cmd "browser artifacts are valid" \
@@ -181,8 +186,12 @@ run_cmd "Gerrit browser E2E config syntax" \
   node --check playwright/playwright.config.mjs
 run_cmd "Gerrit browser E2E test syntax" \
   node --check tests/browser/gerrit_upload.spec.mjs
-run_cmd "process tests" tests/process_test.sh
-run_cmd "review tests" tests/review_test.sh
+run_cmd "process tests ignore ambient Capsule mode" \
+  env CASUAL_REVIEW_USE_CAPSULE=1 CAPSULE_PROFILES=/invalid \
+    tests/process_test.sh
+run_cmd "review tests ignore ambient Capsule mode" \
+  env CASUAL_REVIEW_USE_CAPSULE=1 CAPSULE_PROFILES=/invalid \
+    tests/review_test.sh
 run_cmd "Gerrit upload tests" tests/gerrit_upload_test.sh
 run_cmd "Gerrit respond tests" tests/gerrit_respond_test.sh
 run_cmd "GitHub upload tests" tests/github_upload_test.sh
