@@ -5,6 +5,9 @@ ROOT_DIR="$(
   CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P
 )"
 
+# Temporary repositories and engine mocks must share the host filesystem.
+unset CASUAL_REVIEW_USE_CAPSULE CAPSULE_PROFILES
+
 tmp=
 
 cleanup() {

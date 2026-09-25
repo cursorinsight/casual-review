@@ -7,8 +7,9 @@ ROOT_DIR=$(
 CLI=$ROOT_DIR/bin/casual-review
 tmp=$(mktemp -d)
 
-# Tests opt into API keys explicitly where needed.
-unset OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_API_KEY GEMINI_API_KEY
+# Tests opt into Capsule, profiles, and API keys explicitly where needed.
+unset CASUAL_REVIEW_USE_CAPSULE CAPSULE_PROFILES \
+  OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_API_KEY GEMINI_API_KEY
 
 cleanup() {
   rm -rf -- "$tmp"
@@ -105,6 +106,8 @@ if grep -Fq "$openai_key" "$capsule_log" ||
 fi
 grep -Fqx 'api_keys=' "$capsule_log" ||
   die "Capsule inherited host API keys"
+grep -Fqx 'profiles=' "$capsule_log" ||
+  die "review inherited ambient Capsule profiles"
 api_key_warning='Warning: host API keys are not forwarded into Capsule:'
 api_key_warning+=' OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY'
 grep -Fqx "$api_key_warning" "$tmp/stderr" ||

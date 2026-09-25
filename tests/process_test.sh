@@ -9,6 +9,9 @@ cd "$ROOT_DIR"
 
 tmp=
 
+# Keep agent mocks on the host even when the caller uses Capsule by default.
+unset CASUAL_REVIEW_USE_CAPSULE CAPSULE_PROFILES
+
 # shellcheck disable=SC2317
 cleanup() {
   if [[ -n "$tmp" ]]; then
