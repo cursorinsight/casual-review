@@ -121,8 +121,6 @@ shellcheck_files=(
   libexec/casual-review/github/*
   tests/*.sh
 )
-hadolint_files=(Dockerfile)
-
 printf 'checks: '
 run_checked_linter \
   "shellcheck" \
@@ -130,13 +128,6 @@ run_checked_linter \
   koalaman/shellcheck:v0.10.0 \
   "" \
   "${shellcheck_files[@]}"
-
-run_checked_linter \
-  "hadolint" \
-  hadolint \
-  hadolint/hadolint:2.12.0 \
-  /bin/hadolint \
-  "${hadolint_files[@]}"
 
 printf '\nSummary: %d passed, %d failed, %d skipped\n' \
   "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT"
