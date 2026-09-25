@@ -523,21 +523,30 @@ SUMMARY_ENGINE=claude casual-review review --engine all
 
 ## 💊 Running inside Capsule
 
-This project's `Dockerfile` and `compose.yml` plug into
-[Capsule](https://github.com/cursorinsight/casual-capsule)'s
-`CAPSULE_CUSTOM_COMPOSE` custom-image mechanism directly — point it at this
-checkout, no copying into the Capsule checkout required:
+This project's `capsule.toml` is a
+[Capsule](https://github.com/cursorinsight/casual-capsule) profile. Point
+Capsule at this checkout; no files need to be copied into the Capsule
+checkout.
+
+Build the profile image once:
+
+```bash
+capsule build --profile /path/to/casual-review
+```
+
+The same profile and commands work with Capsule's Docker and Podman backends.
+Select the backend in Capsule itself. For a Podman machine, the Casual Review
+checkout must be visible to the machine so Capsule can use it as a named build
+context.
 
 Set `CASUAL_REVIEW_USE_CAPSULE=1` to make `casual-review review` and
 `casual-review process` enter Capsule automatically. The dispatcher detects an
 existing Capsule and avoids nesting. Other subcommands continue to run on the
 host.
 
-Build the custom image once, then enable automatic execution:
+After building, enable automatic execution:
 
 ```bash
-CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
-    capsule --build-custom
 export CASUAL_REVIEW_USE_CAPSULE=1
 
 casual-review review --engine claude
@@ -545,26 +554,39 @@ casual-review process --engine codex
 ```
 
 The automatic wrapper uses `capsule` from `PATH`. Set `CAPSULE_BIN` to another
-executable path. It always sets `CAPSULE_CUSTOM_COMPOSE` to this package's
-`compose.yml`, replacing any ambient value from the repository being reviewed.
+executable path. It adds this checkout with `--profile`, preserving any
+profiles already selected through `CAPSULE_PROFILES`. It clears an ambient
+`CAPSULE_CUSTOM_COMPOSE` because Capsule cannot combine legacy Compose
+overrides with profiles.
 
-The compose override forwards the engine, model, effort, extra-argument, and
-summary environment variables documented above. It also forwards the API keys
-used by `--use-credits`. CLI options are preserved unchanged.
+The profile forwards the engine, model, effort, extra-argument, and summary
+environment variables documented above. It also forwards the API keys used by
+`--use-credits`. CLI options are preserved unchanged.
+
+Set the profile through the environment for manual commands if preferred:
+
+```bash
+export CAPSULE_PROFILES=/path/to/casual-review
+capsule build
+capsule casual-review review --engine claude
+```
+
+Separate multiple `CAPSULE_PROFILES` entries with semicolons. Capsule applies
+them in order.
 
 Manual Capsule invocation remains available:
 
 ```bash
-CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
-    /path/to/casual-capsule/capsule.sh casual-review review \
+/path/to/casual-capsule/capsule.sh \
+    --profile /path/to/casual-review casual-review review \
     --engine claude --base origin/master --head HEAD
 ```
 
-Upload a generated review directory with the same custom image:
+Upload a generated review directory with the same profile:
 
 ```bash
-CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
-    /path/to/casual-capsule/capsule.sh env \
+/path/to/casual-capsule/capsule.sh \
+    --profile /path/to/casual-review env \
     GERRIT_URL=https://gerrit.example.com/r \
     GERRIT_USER='<gerrit-user>' \
     GERRIT_HTTP_PASSWORD='<http-password-or-token>' \
@@ -574,41 +596,40 @@ CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
 Export browser-upload bundles from a generated review directory:
 
 ```bash
-CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
-    /path/to/casual-capsule/capsule.sh casual-review gerrit export \
+/path/to/casual-capsule/capsule.sh \
+    --profile /path/to/casual-review casual-review gerrit export \
     --engine claude
 ```
 
-Process a generated review directory with the same custom image:
+Process a generated review directory with the same profile:
 
 ```bash
-CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
-    /path/to/casual-capsule/capsule.sh casual-review process \
+/path/to/casual-capsule/capsule.sh \
+    --profile /path/to/casual-review casual-review process \
     --engine codex --reviews ./ai-reviews
 ```
 
 Respond to uploaded Gerrit review comments from a processed decision log:
 
 ```bash
-CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
-    /path/to/casual-capsule/capsule.sh env \
+/path/to/casual-capsule/capsule.sh \
+    --profile /path/to/casual-review env \
     GERRIT_URL=https://gerrit.example.com/r \
     GERRIT_USER='<gerrit-user>' \
     GERRIT_HTTP_PASSWORD='<http-password-or-token>' \
     casual-review gerrit respond --interactive
 ```
 
-`--build-custom` layers this project's CLI and prompts on top of the
-`casual-capsule-cli` base image and puts `casual-review` on `PATH`. Rerun it
-after changing files under `bin/`, `lib/`, `libexec/`, or `prompts/`.
+The profile layers this project's CLI and prompts on top of Capsule's base
+image and puts `casual-review` on `PATH`. Rerun the profile build after
+changing files under `bin/`, `lib/`, `libexec/`, or `prompts/`.
 
 To run `casual-review` inside a capsule directly from the CLI, the following
 alias can come handy (applying Codex as the AI engine and `xhigh` reasoning
 effort, for example):
 
 ```bash
-alias review='CAPSULE_CUSTOM_COMPOSE=/path/to/casual-review/compose.yml \
-      capsule env \
+alias review='capsule --profile /path/to/casual-review env \
       CODEX_EFFORT=xhigh \
       CODEX_EXTRA_ARGS="--dangerously-bypass-approvals-and-sandbox" \
       casual-review review --engine codex'
@@ -631,10 +652,9 @@ Run local linters with:
 
 `test_all.sh` checks command help paths and runs the script tests under
 `tests/`.
-`check_all.sh` runs `shellcheck` over shell scripts plus `hadolint` over
-`Dockerfile`. When a linter is not installed locally, `check_all.sh` falls
-back to Docker. CI runs hadolint and shellcheck as separate checker steps and
-calls only `test_all.sh` from the test job.
+`check_all.sh` runs `shellcheck` over shell scripts. When it is not installed
+locally, `check_all.sh` falls back to Docker. CI runs shellcheck as a separate
+checker step and calls only `test_all.sh` from the test job.
 
 Both runners print `.` for a pass and `s` for a skipped check, followed by a
 numeric summary. Failure details and captured command output are printed only

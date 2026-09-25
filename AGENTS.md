@@ -63,4 +63,4 @@ Assisted-by: Copilot:claude-sonnet-4.6
    `CAPSULE_UID` / `CAPSULE_GID` override. Fallback: `1000:100`.
 8. `docker/entrypoint.sh` adjusts UID/GID, Docker socket group,
    and home ownership, then drops privileges.
-9. When Dockerfile tool packages change, update README docs and tests.
+9. When Capsule profile tool packages change, update README docs and tests.

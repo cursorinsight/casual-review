@@ -1,0 +1,47 @@
+version = 1
+name = "casual-review"
+
+[env]
+CASUAL_REVIEW_USE_CAPSULE = "${CASUAL_REVIEW_USE_CAPSULE}"
+CASUAL_REVIEW_ENGINE = "${CASUAL_REVIEW_ENGINE}"
+CODEX_BIN = "${CODEX_BIN}"
+CLAUDE_BIN = "${CLAUDE_BIN}"
+ANTIGRAVITY_BIN = "${ANTIGRAVITY_BIN}"
+CODEX_MODEL = "${CODEX_MODEL}"
+CLAUDE_MODEL = "${CLAUDE_MODEL}"
+ANTIGRAVITY_MODEL = "${ANTIGRAVITY_MODEL}"
+CODEX_EFFORT = "${CODEX_EFFORT}"
+CLAUDE_EFFORT = "${CLAUDE_EFFORT}"
+ANTIGRAVITY_EFFORT = "${ANTIGRAVITY_EFFORT}"
+CODEX_EXTRA_ARGS = "${CODEX_EXTRA_ARGS}"
+CLAUDE_EXTRA_ARGS = "${CLAUDE_EXTRA_ARGS}"
+ANTIGRAVITY_EXTRA_ARGS = "${ANTIGRAVITY_EXTRA_ARGS}"
+SUMMARY_ENGINE = "${SUMMARY_ENGINE}"
+OPENAI_API_KEY = "${OPENAI_API_KEY}"
+ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}"
+GOOGLE_API_KEY = "${GOOGLE_API_KEY}"
+GEMINI_API_KEY = "${GEMINI_API_KEY}"
+
+[dockerfile]
+content = '''
+COPY --from=casual-review bin/ /opt/casual-review/bin/
+COPY --from=casual-review lib/ /opt/casual-review/lib/
+COPY --from=casual-review libexec/ /opt/casual-review/libexec/
+COPY --from=casual-review prompts/ /opt/casual-review/prompts/
+RUN chmod -R a+rX \
+      /opt/casual-review/bin \
+      /opt/casual-review/lib \
+      /opt/casual-review/libexec \
+      /opt/casual-review/prompts && \
+    chmod 755 \
+      /opt/casual-review/bin/casual-review \
+      /opt/casual-review/libexec/casual-review/completion \
+      /opt/casual-review/libexec/casual-review/review \
+      /opt/casual-review/libexec/casual-review/process \
+      /opt/casual-review/libexec/casual-review/gerrit/export \
+      /opt/casual-review/libexec/casual-review/gerrit/upload \
+      /opt/casual-review/libexec/casual-review/gerrit/respond \
+      /opt/casual-review/libexec/casual-review/github/upload && \
+    ln -sf /opt/casual-review/bin/casual-review \
+      /usr/local/bin/casual-review
+'''

@@ -44,12 +44,13 @@ grep -q '^  upload ' "$tmp/stdout" ||
 
 capsule_bin=$tmp/capsule
 capsule_log=$tmp/capsule.log
-other_compose=$tmp/compose.yml
-touch "$other_compose"
+other_profile=$tmp/other-profile
+mkdir "$other_profile"
 cat >"$capsule_bin" <<'EOF_CAPSULE'
 #!/usr/bin/env bash
 {
   printf 'compose=%s\n' "${CAPSULE_CUSTOM_COMPOSE:-}"
+  printf 'profiles=%s\n' "${CAPSULE_PROFILES:-}"
   printf 'engine=%s\n' "${CASUAL_REVIEW_ENGINE:-}"
   printf 'effort=%s\n' "${CODEX_EFFORT:-}"
   printf 'arg=%s\n' "$@"
@@ -60,29 +61,37 @@ chmod 755 "$capsule_bin"
 expect_status 0 env \
   CASUAL_REVIEW_USE_CAPSULE=1 \
   CAPSULE_HOST_WORKDIR= \
-  CAPSULE_CUSTOM_COMPOSE="$other_compose" \
+  CAPSULE_CUSTOM_COMPOSE="$tmp/compose.yml" \
+  CAPSULE_PROFILES="$other_profile" \
   CAPSULE_BIN="$capsule_bin" \
   CAPSULE_LOG="$capsule_log" \
   CASUAL_REVIEW_ENGINE=claude \
   CODEX_EFFORT=xhigh \
   "$CLI" review --limit 2
-grep -Fqx "compose=$ROOT_DIR/compose.yml" "$capsule_log" ||
-  die "review did not select the package Capsule compose file"
+grep -Fqx 'compose=' "$capsule_log" ||
+  die "review preserved incompatible custom Compose configuration"
+grep -Fqx "profiles=$other_profile" "$capsule_log" ||
+  die "review did not preserve ambient Capsule profiles"
 grep -Fqx 'engine=claude' "$capsule_log" ||
   die "review did not preserve CASUAL_REVIEW_ENGINE"
 grep -Fqx 'effort=xhigh' "$capsule_log" ||
   die "review did not preserve CODEX_EFFORT"
-review_args=$'arg=casual-review\narg=review\narg=--limit\narg=2'
+printf -v review_args \
+  'arg=--profile\narg=%s\narg=casual-review\narg=review\narg=--limit\narg=2' \
+  "$ROOT_DIR"
 [[ $(grep '^arg=' "$capsule_log") == "$review_args" ]] ||
   die "review did not preserve arguments through Capsule"
 
 expect_status 0 env \
   CASUAL_REVIEW_USE_CAPSULE=1 \
   CAPSULE_HOST_WORKDIR= \
+  CAPSULE_PROFILES="$other_profile" \
   CAPSULE_BIN="$capsule_bin" \
   CAPSULE_LOG="$capsule_log" \
   "$CLI" process --reviews reviews
-process_args=$'arg=casual-review\narg=process\narg=--reviews\narg=reviews'
+printf -v process_args 'arg=--profile\narg=%s' "$ROOT_DIR"
+process_args+=$'\narg=casual-review\narg=process'
+process_args+=$'\narg=--reviews\narg=reviews'
 [[ $(grep '^arg=' "$capsule_log") == "$process_args" ]] ||
   die "process did not preserve arguments through Capsule"
 
@@ -130,9 +139,21 @@ for name in \
   CODEX_EXTRA_ARGS CLAUDE_EXTRA_ARGS ANTIGRAVITY_EXTRA_ARGS \
   SUMMARY_ENGINE OPENAI_API_KEY ANTHROPIC_API_KEY \
   GOOGLE_API_KEY GEMINI_API_KEY; do
-  grep -Eq "^[[:space:]]+- ${name}$" "$ROOT_DIR/compose.yml" ||
-    die "compose.yml does not forward $name"
+  expected="${name} = \"\${${name}}\""
+  grep -Fqx "$expected" "$ROOT_DIR/capsule.toml" ||
+    die "capsule.toml does not forward $name"
 done
+
+grep -Fqx 'version = 1' "$ROOT_DIR/capsule.toml" ||
+  die "capsule.toml does not use profile version 1"
+grep -Fqx 'name = "casual-review"' "$ROOT_DIR/capsule.toml" ||
+  die "capsule.toml has the wrong profile name"
+[[ $(grep -c '^COPY --from=casual-review ' \
+  "$ROOT_DIR/capsule.toml") == 4 ]] ||
+  die "capsule.toml does not use the named build context"
+if grep -Eq '^[[:space:]]*FROM[[:space:]]' "$ROOT_DIR/capsule.toml"; then
+  die "capsule.toml contains a forbidden FROM instruction"
+fi
 
 expect_status 2 "$CLI"
 expect_status 2 "$CLI" unknown

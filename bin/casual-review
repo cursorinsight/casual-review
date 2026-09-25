@@ -90,7 +90,7 @@ running_inside_capsule() {
 run_agent_leaf() {
   local leaf=$1
   local capsule_bin=${CAPSULE_BIN:-capsule}
-  local compose_file
+  local profile_file=$CASUAL_REVIEW_ROOT/capsule.toml
 
   shift
   if [[ -z "${CASUAL_REVIEW_USE_CAPSULE:-}" ]] ||
@@ -99,18 +99,18 @@ run_agent_leaf() {
     run_leaf "$leaf" "$@"
   fi
 
-  compose_file=$CASUAL_REVIEW_ROOT/compose.yml
-  [[ -r "$compose_file" ]] || {
-    printf 'Error: Capsule compose file is not readable: %s\n' \
-      "$compose_file" >&2
+  [[ -r "$profile_file" ]] || {
+    printf 'Error: Capsule profile is not readable: %s\n' \
+      "$profile_file" >&2
     exit 1
   }
   command -v "$capsule_bin" >/dev/null 2>&1 || {
     printf 'Error: Capsule executable not found: %s\n' "$capsule_bin" >&2
     exit 1
   }
-  export CAPSULE_CUSTOM_COMPOSE=$compose_file
-  exec "$capsule_bin" casual-review "$leaf" "$@"
+  unset CAPSULE_CUSTOM_COMPOSE
+  exec "$capsule_bin" --profile "$CASUAL_REVIEW_ROOT" \
+    casual-review "$leaf" "$@"
 }
 
 case "${1-}" in

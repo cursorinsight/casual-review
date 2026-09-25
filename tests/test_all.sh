@@ -120,6 +120,7 @@ require_readable lib/casual-review/common.sh
 require_readable lib/casual-review/gerrit-upload.sh
 require_readable browser/casual-review-upload-core.js
 require_readable Makefile
+require_readable capsule.toml
 require_readable package.json
 require_readable package-lock.json
 require_readable playwright/playwright.config.mjs
@@ -139,6 +140,8 @@ require_absent bin/process-reviews
 require_absent bin/export-gerrit-reviews
 require_absent bin/upload-gerrit-reviews
 require_absent bin/respond-gerrit-reviews
+require_absent Dockerfile
+require_absent compose.yml
 require_executable tests/check_all.sh
 require_executable tests/test_all.sh
 require_executable tests/cli_test.sh
