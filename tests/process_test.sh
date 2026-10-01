@@ -130,4 +130,25 @@ assert_grep "ARG[009]=--dangerously-skip-permissions" "$antigravity_log" \
 assert_grep "Review directory: \`$tmp/reviews\`" "$antigravity_log" \
   "antigravity review dir"
 
+series=$tmp/series
+mkdir -p "$series/rounds/001" "$series/rounds/002"
+printf '# Casual Review series\n' >"$series/SERIES.md"
+printf '# AI-assisted Gerrit commit reviews\n' \
+  >"$series/rounds/001/README.md"
+printf '# AI-assisted Gerrit commit reviews\n' \
+  >"$series/rounds/002/README.md"
+series_log=$tmp/series.log
+MOCK_LOG=$series_log \
+  CODEX_BIN="$tmp/mock-engine" \
+  bin/casual-review process \
+    --engine codex \
+    --reviews "$series" \
+    --prompt "$tmp/process-prompt.md" >/dev/null
+assert_grep "Review directory: \`$series/rounds/002\`" "$series_log" \
+  "latest series round"
+assert_grep "Decision log: \`$series/DECISIONS.md\`" "$series_log" \
+  "series decision log"
+assert_grep "Review series: \`$series\`" "$series_log" \
+  "review series root"
+
 printf 'process test ok\n'

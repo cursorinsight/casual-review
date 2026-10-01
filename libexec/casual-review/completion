@@ -81,7 +81,7 @@ _casual_review() {
       COMPREPLY=($(compgen -W "$refs" -- "$cur"))
       return
       ;;
-    --limit|--model|--effort|--pr|--repo)
+    --limit|--model|--effort|--pr|--repo|--round)
       return
       ;;
   esac
@@ -89,24 +89,26 @@ _casual_review() {
   case "$command:$action" in
     review:*)
       options='--engine --base --head --output --prompt --limit --model
-        --effort --use-credits --skip-summary -h --help'
+        --effort --use-credits --skip-summary --series --continue-series
+        --recheck-skipped -h --help'
       ;;
     process:*)
       options='--engine --reviews --prompt --model --effort --use-credits
-        -h --help'
+        --round -h --help'
       ;;
     gerrit:export)
-      options='--output --engine --limit -h --help'
+      options='--output --engine --limit --round -h --help'
       ;;
     gerrit:upload)
-      options='--dry-run --interactive --yolo --engine --limit -h --help'
+      options='--dry-run --interactive --yolo --engine --limit --round
+        -h --help'
       ;;
     gerrit:respond)
-      options='--dry-run --interactive --yolo --limit -h --help'
+      options='--dry-run --interactive --yolo --limit --round -h --help'
       ;;
     github:upload)
       options='--dry-run --interactive --yolo --pr --repo --engine
-        --limit -h --help'
+        --limit --round -h --help'
       ;;
     completion:*)
       options='-h --help'
@@ -150,6 +152,9 @@ _casual_review_review() {
     '--base[set base ref]:ref:' \
     '--head[set head ref]:ref:' \
     '--output[set output directory]:directory:_directories' \
+    '--series[start numbered review series]' \
+    '--continue-series[continue an ambiguous review series]' \
+    '--recheck-skipped[ignore prior skip decisions]' \
     '--prompt[set prompt template]:file:_files' \
     '--limit[limit commits]:count:' \
     '--model[override model]:model:' \
@@ -165,6 +170,7 @@ _casual_review_process() {
   _arguments \
     '--engine[select engine]:engine:(codex claude antigravity)' \
     '--reviews[set review directory]:directory:_directories' \
+    '--round[select review round]:round:' \
     '--prompt[set prompt template]:file:_files' \
     '--model[override model]:model:' \
     '--effort[override reasoning effort]:effort:' \
@@ -180,6 +186,7 @@ _casual_review_gerrit_export() {
     '--output[set output directory]:directory:_directories' \
     '--engine[filter engine]:engine:(codex claude antigravity all)' \
     '--limit[limit review files]:count:' \
+    '--round[select review round]:round:' \
     '(-h --help)-h[show help]' \
     '(-h --help)--help[show help]' \
     '1:command:(gerrit)' \
@@ -194,6 +201,7 @@ _casual_review_gerrit_upload() {
     '--yolo[post all comments and verdicts]' \
     '--engine[filter engine]:engine:(codex claude antigravity all)' \
     '--limit[limit review files]:count:' \
+    '--round[select review round]:round:' \
     '(-h --help)-h[show help]' \
     '(-h --help)--help[show help]' \
     '1:command:(gerrit)' \
@@ -207,6 +215,7 @@ _casual_review_gerrit_respond() {
     '--interactive[confirm each Gerrit reply]' \
     '--yolo[post all matched decisions]' \
     '--limit[limit decision entries]:count:' \
+    '--round[select review round]:round:' \
     '(-h --help)-h[show help]' \
     '(-h --help)--help[show help]' \
     '1:command:(gerrit)' \
@@ -224,6 +233,7 @@ _casual_review_github_upload() {
     '--repo[select repository]:repository:' \
     '--engine[filter engine]:engine:(codex claude antigravity all)' \
     '--limit[limit review files]:count:' \
+    '--round[select review round]:round:' \
     '(-h --help)-h[show help]' \
     '(-h --help)--help[show help]' \
     '1:command:(github)' \
@@ -395,6 +405,12 @@ complete -c casual-review -n '__casual_review_uses review' \
   -l use-credits -d 'Allow metered API billing'
 complete -c casual-review -n '__casual_review_uses review' \
   -l skip-summary -d 'Skip aggregate summary'
+complete -c casual-review -n '__casual_review_uses review' \
+  -l series -d 'Start numbered review series'
+complete -c casual-review -n '__casual_review_uses review' \
+  -l continue-series -d 'Continue ambiguous review series'
+complete -c casual-review -n '__casual_review_uses review' \
+  -l recheck-skipped -d 'Ignore prior skip decisions'
 
 complete -c casual-review -n '__casual_review_uses process' -l engine -r \
   -f -a 'codex claude antigravity' -d 'Select engine'
@@ -408,6 +424,8 @@ complete -c casual-review -n '__casual_review_uses process' -l effort -r \
   -d 'Override reasoning effort'
 complete -c casual-review -n '__casual_review_uses process' \
   -l use-credits -d 'Allow metered API billing'
+complete -c casual-review -n '__casual_review_uses process' -l round -r \
+  -d 'Select review round'
 
 complete -c casual-review \
   -n '__casual_review_gerrit_uses export' -l output -r \
@@ -423,6 +441,12 @@ for action in export upload respond
   complete -c casual-review \
     -n "__casual_review_gerrit_uses $action" -l limit -r \
     -d 'Limit entries'
+end
+
+for action in export upload respond
+  complete -c casual-review \
+    -n "__casual_review_gerrit_uses $action" -l round -r \
+    -d 'Select review round'
 end
 
 for action in upload respond
@@ -443,6 +467,9 @@ complete -c casual-review \
 complete -c casual-review \
   -n '__casual_review_github_uses upload' -l limit -r \
   -d 'Limit review files'
+complete -c casual-review \
+  -n '__casual_review_github_uses upload' -l round -r \
+  -d 'Select review round'
 complete -c casual-review \
   -n '__casual_review_github_uses upload' -l pr -r \
   -d 'Select pull request'

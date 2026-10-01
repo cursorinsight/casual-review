@@ -120,6 +120,8 @@ casual-review completion fish > \
 
 ## 📂 Result layout
 
+The first run keeps the original flat layout for compatibility:
+
 ```text
 ai-reviews/
 ├── README.md
@@ -133,6 +135,46 @@ ai-reviews/
 └── antigravity/
     └── ...
 ```
+
+Running `casual-review review` again for the same commit series migrates that
+output to round `001` and writes the new run to round `002`:
+
+```text
+ai-reviews/
+├── SERIES.md
+├── DECISIONS.md
+└── rounds/
+    ├── 001/
+    │   ├── README.md
+    │   └── ...
+    └── 002/
+        ├── README.md
+        └── ...
+```
+
+Repository, base, branch, and commit identity guard automatic continuation.
+Commit identity can match by hash, Gerrit `Change-Id`, or stable patch ID.
+When processing has amended every commit, Git range comparison recognizes the
+rewritten stack against the same recorded base. Use `--continue-series` only
+to override a rejected match deliberately. Use `--series` to create the
+numbered layout on the first run.
+
+Legacy flat reviews created without `Base commit` and `Head commit` metadata
+cannot be matched automatically after commits are amended unless a Gerrit
+`Change-Id` or stable patch ID still matches. Inspect the review and Git range,
+then pass `--continue-series` to migrate it deliberately; this bypasses the
+commit identity guard.
+
+New rounds are staged in a hidden directory and published after their index is
+complete, so an interrupted run can be retried without manual repair.
+The initial flat-to-series migration is not interruption-safe. Terminating it
+can leave a partial `rounds/.001.tmp` or `rounds/001` state that requires
+manual repair before retrying.
+
+`DECISIONS.md` remains at the series root and accumulates decisions across
+rounds. Prior skip decisions are supplied to later reviews so unchanged
+findings are not reported repeatedly. Pass `--recheck-skipped` to review them
+again.
 
 ## 🔄 Processing Review Feedback
 
@@ -149,12 +191,16 @@ explicit review directory:
 casual-review process --engine codex
 casual-review process --engine claude --reviews ./reviews
 casual-review process --engine antigravity ./ai-reviews
+casual-review process --round 1
 ```
 
 The default review directory is `ai-reviews`. `--model`, `--effort`, and the
 same `*_BIN`, `*_MODEL`, `*_EFFORT`, and `*_EXTRA_ARGS` environment overrides
 used by `casual-review review` are supported for the selected engine.
 Set `CASUAL_REVIEW_ENGINE` to choose the default engine without a flag.
+For a review series, the latest completed round is processed by default and
+decisions are appended to the root `DECISIONS.md`. Use `--round N` to process
+another round.
 
 ## 📤 Uploading to Gerrit
 
@@ -192,6 +238,9 @@ HTTP password is not passed through `curl --user` argv.
 Posting modes query existing Gerrit inline comments and review messages before
 submitting. Already-posted AI inline comments and review verdict messages are
 filtered out, so rerunning an upload does not duplicate them.
+
+For a review series, the latest completed round is uploaded by default. Use
+`--round N` to select an earlier round explicitly.
 
 Gerrit requests use bounded curl timeouts so a stalled network cannot hang the
 entire upload indefinitely. Override the defaults with
@@ -244,10 +293,15 @@ For browser-based uploads, export one compressed JSON bundle per Gerrit change:
 
 ```bash
 casual-review gerrit export --engine claude
+casual-review gerrit export --round 1
 ```
 
-Bundles are written to `./ai-reviews/gerrit-browser-upload/` by default, using
-the 7-character reviewed commit hash as the file name.
+For a flat review directory, bundles are written to
+`./ai-reviews/gerrit-browser-upload/` by default. For a review series, they are
+written to
+`./ai-reviews/rounds/<round>/gerrit-browser-upload/`. Series exports select the
+latest completed round unless `--round N` is supplied. Bundle filenames use
+the 7-character reviewed commit hash.
 
 #### Tampermonkey Userscript
 
@@ -338,7 +392,8 @@ artifacts are ignored by git.
 `casual-review gerrit respond` reads the generated review files and a
 `DECISIONS.md` file in the format used by `prompts/process-reviews.md`, finds
 the already uploaded AI inline comments on Gerrit, and posts replies recording
-the chosen decision, fix commit, squash target, checks, and reasoning.
+the chosen decision, fix placement, checks, and reasoning. Legacy logs with
+fix commit and squash target fields remain readable.
 It maps decisions to uploaded inline comments by review-file order. Decisions
 for questions or other non-inline notes are posted as tagged Gerrit change
 messages with a stable decision key when that review file had inline comments.
@@ -361,6 +416,8 @@ color-coded prompts. Set `NO_COLOR=1` to disable colors.
 The default review directory is `./ai-reviews`, and the default decisions file
 is `./ai-reviews/DECISIONS.md`. Pass a review directory to use its
 `DECISIONS.md`; pass both paths only when the decision log lives elsewhere.
+For a series, responses use its latest completed round and root decision log.
+Use `--round N` to respond to decisions from another round.
 
 ## 📤 Uploading to GitHub
 
@@ -421,6 +478,9 @@ Before posting, the uploader loads existing reviews and inline comments.
 Exact duplicates for the same engine, commit, path, and line are skipped, as
 is an identical unified verdict. `--interactive` uses the same terminal UI as
 the Gerrit uploader and confirms the final unified verdict separately.
+
+For a review series, the latest completed round is uploaded by default. Use
+`--round N` to upload an earlier round.
 
 GitHub review creation and line-location constraints are documented in the
 [pull-request review API](https://docs.github.com/en/rest/pulls/reviews).

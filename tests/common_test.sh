@@ -28,6 +28,42 @@ trap cleanup EXIT
 
 tmp=$(mktemp -d)
 
+flat=$tmp/flat
+series=$tmp/series
+mkdir -p "$flat" "$series/rounds/001" "$series/rounds/002"
+printf '# AI-assisted Gerrit commit reviews\n' >"$flat/README.md"
+printf '# Casual Review series\n' >"$series/SERIES.md"
+printf '# AI-assisted Gerrit commit reviews\n' \
+  >"$series/rounds/001/README.md"
+printf '# AI-assisted Gerrit commit reviews\n' \
+  >"$series/rounds/002/README.md"
+[[ "$(resolve_review_round "$flat")" == "$flat" ]] ||
+  die "common test: flat review resolution failed"
+[[ "$(resolve_review_round "$series")" == "$series/rounds/002" ]] ||
+  die "common test: latest series round resolution failed"
+[[ "$(resolve_review_round "$series" 1)" == "$series/rounds/001" ]] ||
+  die "common test: explicit series round resolution failed"
+(
+  resolve_review_round "$series" 3
+) >/dev/null 2>&1 && die "common test: missing series round accepted"
+round_error=$tmp/round-error
+if (
+    resolve_review_round "$series/rounds"
+  ) >/dev/null 2>"$round_error"; then
+  die "common test: rounds container accepted"
+fi
+grep -Fq 'review directory contains multiple rounds' "$round_error" ||
+  die "common test: rounds container error missing"
+malformed=$tmp/malformed
+mkdir -p "$malformed/rounds"
+if (
+    resolve_review_round "$malformed"
+  ) >/dev/null 2>"$round_error"; then
+  die "common test: malformed series accepted"
+fi
+grep -Fq 'review series metadata is missing or unreadable' "$round_error" ||
+  die "common test: malformed series error missing"
+
 helper_out=$tmp/helper.out
 write_file_from_command "$helper_out" printf ok ||
   die "common test: command write helper failed"

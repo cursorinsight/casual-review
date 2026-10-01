@@ -10,6 +10,7 @@ Options:
   --engine NAME     codex, claude, or antigravity
                     (default: CASUAL_REVIEW_ENGINE or codex)
   --reviews DIR     generated review directory (default: ai-reviews)
+  --round N         process a specific round from a review series
   --prompt FILE     prompt template (default: prompts/process-reviews.md)
   --model NAME      model override for the selected engine
   --effort LEVEL    reasoning-effort override for the selected engine
@@ -52,6 +53,10 @@ USE_CREDITS=0
 PROMPT_TMP=
 REPO_ROOT=
 REVIEWS_DIR_ABS=
+SERIES_ROOT_ABS=
+ROUND=
+DECISIONS_FILE=
+REVIEW_ACCESS_DIR=
 
 while (($#)); do
   case "$1" in
@@ -63,6 +68,11 @@ while (($#)); do
     --reviews)
       cli_require_value "$1" "${2-}" "$#"
       REVIEWS_DIR=$2
+      shift 2
+      ;;
+    --round)
+      cli_require_value "$1" "${2-}" "$#"
+      ROUND=$2
       shift 2
       ;;
     --prompt)
@@ -101,6 +111,7 @@ while (($#)); do
 done
 
 cli_validate_engine "$ENGINE"
+[[ -z "$ROUND" ]] || cli_validate_round "$ROUND"
 
 apply_engine_overrides "$ENGINE" "$MODEL_OPT" "$EFFORT_OPT"
 
@@ -121,18 +132,32 @@ elif [[ "$REVIEWS_DIR" != /* && -d "$REPO_ROOT/$REVIEWS_DIR" ]]; then
 else
   die "not a directory: $REVIEWS_DIR"
 fi
+if review_dir_is_series "$REVIEWS_DIR_ABS"; then
+  SERIES_ROOT_ABS=$REVIEWS_DIR_ABS
+  REVIEWS_DIR_ABS=$(resolve_review_round "$SERIES_ROOT_ABS" "$ROUND")
+  DECISIONS_FILE=$SERIES_ROOT_ABS/DECISIONS.md
+else
+  [[ -z "$ROUND" ]] || die "--round requires a review series"
+  DECISIONS_FILE=$REVIEWS_DIR_ABS/DECISIONS.md
+fi
+REVIEW_ACCESS_DIR=${SERIES_ROOT_ABS:-$REVIEWS_DIR_ABS}
 PROMPT_TMP=$(mktemp)
 
 {
   printf 'Use these explicit inputs unless the user corrects them:\n\n'
   printf -- "- Review directory: \`%s\`\n" "$REVIEWS_DIR_ABS"
-  printf -- "- Decision log: \`%s/DECISIONS.md\`\n\n" "$REVIEWS_DIR_ABS"
+  printf -- "- Decision log: \`%s\`\n" "$DECISIONS_FILE"
+  if [[ -n "$SERIES_ROOT_ABS" ]]; then
+    printf -- "- Review series: \`%s\`\n" "$SERIES_ROOT_ABS"
+    printf -- '- Review file paths: relative to the series root\n'
+  fi
+  printf '\n'
   printf 'Do not use a different review directory without asking.\n\n'
   cat "$PROMPT_FILE"
 } >"$PROMPT_TMP"
 
 reviews_outside_repo() {
-  case "$REVIEWS_DIR_ABS/" in
+  case "$REVIEW_ACCESS_DIR/" in
     "$REPO_ROOT"/*) return 1 ;;
     *) return 0 ;;
   esac
@@ -144,7 +169,7 @@ run_codex() {
 
   need "$bin"
   build_engine_arg_arrays codex
-  reviews_outside_repo && add_dir=(--add-dir "$REVIEWS_DIR_ABS")
+  reviews_outside_repo && add_dir=(--add-dir "$REVIEW_ACCESS_DIR")
   "$bin" \
     -C "$REPO_ROOT" \
     --sandbox workspace-write \
@@ -176,7 +201,7 @@ run_antigravity() {
 
   need "$bin"
   build_engine_arg_arrays antigravity
-  reviews_outside_repo && add_dir=(--add-dir "$REVIEWS_DIR_ABS")
+  reviews_outside_repo && add_dir=(--add-dir "$REVIEW_ACCESS_DIR")
   (
     cd "$REPO_ROOT"
     "$bin" \

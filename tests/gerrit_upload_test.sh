@@ -128,6 +128,29 @@ env_all_output=$(
 )
 [[ "$env_all_output" == *"Dry-run payloads: 2"* ]] ||
   die "upload test: environment all-engine filter failed"
+
+series=$tmp/series
+mkdir -p "$series/rounds/001/codex" "$series/rounds/002/codex"
+printf '# Casual Review series\n' >"$series/SERIES.md"
+printf '# AI-assisted Gerrit commit reviews\n' \
+  >"$series/rounds/001/README.md"
+printf '# AI-assisted Gerrit commit reviews\n' \
+  >"$series/rounds/002/README.md"
+cp "$file" "$series/rounds/001/codex/001-old.md"
+cp "$file" "$series/rounds/001/codex/002-old.md"
+cp "$file" "$series/rounds/002/codex/001-new.md"
+series_output=$(
+  "$ROOT_DIR/bin/casual-review" gerrit upload \
+    --engine codex --dry-run "$series"
+)
+[[ "$series_output" == *"Dry-run payloads: 1"* ]] ||
+  die "upload test: series did not select latest round"
+round_output=$(
+  "$ROOT_DIR/bin/casual-review" gerrit upload \
+    --engine codex --round 1 --dry-run "$series"
+)
+[[ "$round_output" == *"Dry-run payloads: 2"* ]] ||
+  die "upload test: explicit series round failed"
 if (
   cd "$tmp"
 "$ROOT_DIR/bin/casual-review" gerrit upload \

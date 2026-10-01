@@ -37,6 +37,64 @@ cli_validate_limit() {
     die "--limit must be a non-negative integer"
 }
 
+cli_validate_round() {
+  if [[ ! "$1" =~ ^[1-9][0-9]*$ ]] || ((10#$1 > 999)); then
+    die "--round must be an integer from 1 to 999"
+  fi
+}
+
+review_dir_is_series() {
+  local dir=$1
+
+  [[ -r "$dir/SERIES.md" && -d "$dir/rounds" ]]
+}
+
+review_dir_is_generated() {
+  local dir=$1
+
+  [[ -r "$dir/README.md" ]] &&
+    grep -Fqx '# AI-assisted Gerrit commit reviews' "$dir/README.md"
+}
+
+resolve_review_round() {
+  local dir=$1
+  local requested=${2:-}
+  local candidate
+  local latest=
+  local number
+
+  if ! review_dir_is_series "$dir"; then
+    [[ ! -d "$dir/rounds" ]] ||
+      die "review series metadata is missing or unreadable: $dir/SERIES.md"
+    for candidate in "$dir"/[0-9][0-9][0-9]; do
+      review_dir_is_generated "$candidate" || continue
+      die "review directory contains multiple rounds: $dir"
+    done
+    [[ -z "$requested" ]] ||
+      die "--round requires a review series: $dir"
+    printf '%s' "$dir"
+    return 0
+  fi
+
+  if [[ -n "$requested" ]]; then
+    cli_validate_round "$requested"
+    printf -v number '%03d' "$requested"
+    candidate=$dir/rounds/$number
+    review_dir_is_generated "$candidate" ||
+      die "review round does not exist: $requested"
+    printf '%s' "$candidate"
+    return 0
+  fi
+
+  for candidate in "$dir"/rounds/[0-9][0-9][0-9]; do
+    [[ -d "$candidate" ]] || continue
+    review_dir_is_generated "$candidate" || continue
+    latest=$candidate
+  done
+  [[ -n "$latest" ]] || die "review series has no completed rounds: $dir"
+  printf '%s' "$latest"
+}
+
 cli_mode() {
   case "$1" in
     --dry-run) printf 'dry-run' ;;

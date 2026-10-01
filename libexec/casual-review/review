@@ -13,6 +13,9 @@ Options:
                       (default: detected origin/master or origin/main)
   --head REF          head ref (default: HEAD)
   --output DIR        output directory (default: ai-reviews)
+  --series            create series layout immediately
+  --continue-series   continue an ambiguous existing review directory
+  --recheck-skipped   do not suppress findings skipped in earlier rounds
   --prompt FILE       commit prompt template
   --limit N           review only the first N commits
   --model NAME        model override (requires a single --engine, not "all")
@@ -83,6 +86,26 @@ DO_SUMMARY=1
 MODEL_OPT=""
 EFFORT_OPT=""
 USE_CREDITS=0
+FORCE_SERIES=0
+CONTINUE_SERIES=0
+RECHECK_SKIPPED=0
+SERIES_ROOT=
+SERIES_ROUND=
+SERIES_ROUND_DIR=
+SERIES_STAGE_DIR=
+PROMPT_TMP=
+PRIOR_SKIPS=
+MATCH_REASON=
+CURRENT_CHANGE_IDS=()
+CURRENT_PATCH_IDS=()
+CURRENT_IDENTITIES_CACHED=0
+
+cleanup_review_run() {
+  [[ -z "$PROMPT_TMP" ]] || rm -f -- "$PROMPT_TMP"
+  [[ -z "$SERIES_STAGE_DIR" ]] || rm -rf -- "$SERIES_STAGE_DIR"
+}
+
+trap cleanup_review_run EXIT
 
 while (($#)); do
   case "$1" in
@@ -107,6 +130,9 @@ while (($#)); do
       OUTPUT_DIR=$2
       shift 2
       ;;
+    --series) FORCE_SERIES=1; shift ;;
+    --continue-series) CONTINUE_SERIES=1; shift ;;
+    --recheck-skipped) RECHECK_SKIPPED=1; shift ;;
     --prompt)
       cli_require_value "$1" "${2-}" "$#"
       PROMPT_FILE=$2
@@ -136,6 +162,424 @@ done
 
 cli_validate_engine "$ENGINE" 1
 cli_validate_limit "$LIMIT"
+
+repository_identity() {
+  local identity
+
+  identity=$(git config --get remote.origin.url 2>/dev/null || :)
+  [[ -n "$identity" ]] || identity=$REPO_ROOT
+  identity=$(
+    printf '%s\n' "$identity" |
+      sed -E \
+        -e 's#^([[:alpha:]][[:alnum:]+.-]*://)[^/]*@#\1#' \
+        -e 's#^[^/@]+@([^/:]+:)#\1#' \
+        -e '/^[[:alpha:]][[:alnum:]+.-]*:\/\//s/[?#].*$//'
+  )
+  printf '%s' "$identity"
+}
+
+working_branch() {
+  git symbolic-ref --quiet --short HEAD 2>/dev/null || printf 'detached'
+}
+
+commit_change_id() {
+  git show -s --format=%B "$1" 2>/dev/null |
+    sed -n 's/^Change-Id:[[:space:]]*//p' |
+    sed -n '$p'
+}
+
+commit_patch_id() {
+  git show --no-ext-diff --pretty=format: "$1" 2>/dev/null |
+    git patch-id --stable 2>/dev/null |
+    awk 'NR == 1 {print $1}'
+}
+
+cache_current_commit_identities() {
+  local current
+
+  ((CURRENT_IDENTITIES_CACHED == 0)) || return 0
+  for current in "${COMMITS[@]}"; do
+    CURRENT_CHANGE_IDS+=("$(commit_change_id "$current")")
+    CURRENT_PATCH_IDS+=("$(commit_patch_id "$current")")
+  done
+  CURRENT_IDENTITIES_CACHED=1
+}
+
+commit_matches_current_range() {
+  local old=$1
+  local current
+  local i=0
+  local old_change_id
+  local old_patch_id
+
+  git rev-parse --verify "${old}^{commit}" >/dev/null 2>&1 || return 1
+  old=$(git rev-parse "${old}^{commit}")
+  for current in "${COMMITS[@]}"; do
+    [[ "$current" == "$old" ]] && return 0
+  done
+  old_change_id=$(commit_change_id "$old")
+  old_patch_id=$(commit_patch_id "$old")
+  cache_current_commit_identities
+  while ((i < ${#COMMITS[@]})); do
+    if [[ -n "$old_change_id" &&
+        "$old_change_id" == "${CURRENT_CHANGE_IDS[$i]}" ]]; then
+      return 0
+    fi
+    if [[ -n "$old_patch_id" &&
+        "$old_patch_id" == "${CURRENT_PATCH_IDS[$i]}" ]]; then
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+merge_signature() {
+  local parents
+
+  parents=$(git show -s --format=%P "$1") || return 1
+  # Parent hashes cannot contain glob characters; split to count them.
+  # shellcheck disable=SC2086
+  set -- $parents
+  printf '%s\t%s\n' "$#" "$(git show -s --format=%s "$1")"
+}
+
+merge_ranges_correspond() {
+  local old_base=$1
+  local old_head=$2
+  local current_base=$3
+  local current_head=$4
+  local old_merge
+  local old_signature
+  local current_signature
+  local i
+  local matched=0
+  local old_count=0
+  local current_signatures=()
+  local used=()
+
+  while IFS= read -r current_merge; do
+    current_signatures+=("$(merge_signature "$current_merge")")
+    used+=(0)
+  done < <(
+    git rev-list --reverse --min-parents=2 \
+      "${current_base}..${current_head}"
+  )
+
+  while IFS= read -r old_merge; do
+    old_count=$((old_count + 1))
+    old_signature=$(merge_signature "$old_merge")
+    i=0
+    while ((i < ${#current_signatures[@]})); do
+      current_signature=${current_signatures[$i]}
+      if ((used[i] == 0)) &&
+          [[ "$old_signature" == "$current_signature" ]]; then
+        used[i]=1
+        matched=$((matched + 1))
+        break
+      fi
+      i=$((i + 1))
+    done
+  done < <(
+    git rev-list --reverse --min-parents=2 "${old_base}..${old_head}"
+  )
+
+  if ((matched != old_count)); then
+    MATCH_REASON="only $matched of $old_count recorded merge commits"
+    MATCH_REASON+=" correspond to the current range"
+    return 1
+  fi
+  return 0
+}
+
+review_ranges_correspond() {
+  local dir=$1
+  local old_base
+  local old_head
+  local current_base
+  local current_head
+  local old_commit
+  local current_commit
+  local old_subject
+  local current_subject
+  local old_total
+  local old_count
+  local matched=0
+
+  # shellcheck disable=SC2016
+  old_base=$(sed -n 's/^- Base commit: `\([^`]*\)`$/\1/p' \
+    "$dir/README.md")
+  # shellcheck disable=SC2016
+  old_head=$(sed -n 's/^- Head commit: `\([^`]*\)`$/\1/p' \
+    "$dir/README.md")
+  if [[ -z "$old_base" || -z "$old_head" ]]; then
+    MATCH_REASON="review metadata lacks a base or head commit"
+    return 1
+  fi
+  if ! git rev-parse --verify "${old_base}^{commit}" >/dev/null 2>&1; then
+    MATCH_REASON="recorded base commit $old_base is unavailable"
+    return 1
+  fi
+  if ! git rev-parse --verify "${old_head}^{commit}" >/dev/null 2>&1; then
+    MATCH_REASON="recorded head commit $old_head is unavailable"
+    return 1
+  fi
+  old_base=$(git rev-parse "${old_base}^{commit}")
+  current_base=$(git rev-parse "${BASE_REF}^{commit}")
+  if [[ "$old_base" != "$current_base" ]]; then
+    MATCH_REASON="recorded and current base commits differ"
+    return 1
+  fi
+  current_head=$(git rev-parse "${HEAD_REF}^{commit}")
+  old_total=$(git rev-list --count "${old_base}..${old_head}")
+  if ((old_total == 0)); then
+    MATCH_REASON="recorded review range contains no commits"
+    return 1
+  fi
+  old_count=$(git rev-list --count --no-merges \
+    "${old_base}..${old_head}")
+
+  while read -r old_commit current_commit; do
+    old_subject=$(git show -s --format=%s "$old_commit")
+    current_subject=$(git show -s --format=%s "$current_commit")
+    if [[ "$old_subject" == "$current_subject" ]]; then
+      matched=$((matched + 1))
+    fi
+  done < <(
+    git range-diff --no-color --creation-factor=100 \
+        "${old_base}..${old_head}" \
+        "${current_base}..${current_head}" 2>/dev/null |
+      awk '
+      $1 ~ /^[0-9]+:$/ && $2 ~ /^[0-9a-f]+$/ &&
+          ($3 == "=" || $3 == "!") && $4 ~ /^[0-9]+:$/ {
+        print $2, $5
+      }
+    '
+  )
+  if ((matched != old_count)); then
+    MATCH_REASON="only $matched of $old_count recorded commits correspond"
+    MATCH_REASON+=" to the current range"
+    return 1
+  fi
+  merge_ranges_correspond "$old_base" "$old_head" \
+    "$current_base" "$current_head" || return 1
+  return 0
+}
+
+review_dir_matches_range() {
+  local dir=$1
+  local duplicate
+  local old
+  local recorded_base
+  local all_match=1
+  local have_commit=0
+  local seen=()
+
+  MATCH_REASON=
+  # shellcheck disable=SC2016
+  recorded_base=$(sed -n 's/^- Base: `\([^`]*\)`$/\1/p' \
+    "$dir/README.md")
+  if [[ -z "$recorded_base" ]]; then
+    MATCH_REASON="review metadata has no base reference"
+    return 1
+  fi
+  if [[ "$recorded_base" != "$BASE_REF" ]]; then
+    MATCH_REASON="recorded base $recorded_base differs from $BASE_REF"
+    return 1
+  fi
+  while IFS= read -r old; do
+    have_commit=1
+    for duplicate in "${seen[@]}"; do
+      [[ "$duplicate" != "$old" ]] || continue 2
+    done
+    seen+=("$old")
+    commit_matches_current_range "$old" || all_match=0
+  done < <(
+    # shellcheck disable=SC2016
+    sed -n \
+      's/^| [0-9][0-9]* | `\([0-9a-fA-F][0-9a-fA-F]*\)` |.*$/\1/p' \
+      "$dir/README.md"
+  )
+  ((have_commit && all_match)) && return 0
+  review_ranges_correspond "$dir"
+}
+
+directory_is_empty() {
+  local dir=$1
+  local entry
+
+  [[ -d "$dir" && -r "$dir" && -x "$dir" ]] || return 2
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+    return 1
+  done
+  [[ -r "$dir" && -x "$dir" ]] || return 2
+  return 0
+}
+
+series_matches_context() {
+  local root=$1
+  local expected_repo
+  local expected_base
+  local expected_branch
+  local have_round=0
+  local round
+  local round_reason
+
+  MATCH_REASON=
+  expected_repo=$(repository_identity)
+  expected_base=$BASE_REF
+  expected_branch=$(working_branch)
+  if ! grep -Fqx -- \
+      "- Repository: \`$expected_repo\`" "$root/SERIES.md"; then
+    MATCH_REASON="series repository identity is missing or differs"
+    return 1
+  fi
+  if ! grep -Fqx -- "- Base: \`$expected_base\`" "$root/SERIES.md"; then
+    MATCH_REASON="series base is missing or differs from $expected_base"
+    return 1
+  fi
+  if ! grep -Fqx -- \
+      "- Branch: \`$expected_branch\`" "$root/SERIES.md"; then
+    MATCH_REASON="series branch is missing or differs from $expected_branch"
+    return 1
+  fi
+
+  for round in "$root"/rounds/[0-9][0-9][0-9]; do
+    review_dir_is_generated "$round" || continue
+    have_round=1
+    review_dir_matches_range "$round" && return 0
+    round_reason=$MATCH_REASON
+  done
+  ((have_round == 0)) && return 0
+  MATCH_REASON="no completed review round matches: $round_reason"
+  return 1
+}
+
+write_series_index() {
+  local root=$1
+  local round
+  local tmp=$root/.SERIES.md.tmp.$$
+
+  if ! {
+    printf '# Casual Review series\n\n'
+    printf -- '- Format: 1\n'
+    printf -- "- Repository: \`%s\`\n" "$(repository_identity)"
+    printf -- "- Base: \`%s\`\n" "$BASE_REF"
+    printf -- "- Branch: \`%s\`\n\n" "$(working_branch)"
+    printf '## Rounds\n\n'
+    for round in "$root"/rounds/[0-9][0-9][0-9]; do
+      review_dir_is_generated "$round" || continue
+      printf -- '- [%s](rounds/%s/README.md)\n' \
+        "$(basename -- "$round")" "$(basename -- "$round")"
+    done
+  } >"$tmp"; then
+    rm -f -- "$tmp"
+    die "failed to write review series metadata"
+  fi
+  if ! mv -- "$tmp" "$root/SERIES.md"; then
+    rm -f -- "$tmp"
+    die "failed to replace review series metadata"
+  fi
+}
+
+migrate_flat_review() {
+  local root=$1
+  local item
+  local rollback_item
+  local tmp=$root/rounds/.001.tmp
+  local made_rounds=0
+  local -a moved=()
+
+  if [[ ! -d "$root/rounds" ]]; then
+    mkdir "$root/rounds"
+    made_rounds=1
+  fi
+  [[ ! -e "$root/rounds/001" && ! -e "$tmp" ]] ||
+    die "cannot migrate: round 001 already exists"
+  mkdir "$tmp"
+  for item in README.md SUMMARY.md failures.tsv codex claude antigravity \
+      gerrit-browser-upload; do
+    [[ -e "$root/$item" ]] || continue
+    if ! mv -- "$root/$item" "$tmp/$item"; then
+      for rollback_item in "${moved[@]}"; do
+        mv -- "$tmp/$rollback_item" "$root/$rollback_item" || :
+      done
+      rmdir "$tmp" 2>/dev/null || :
+      die "failed to migrate existing review output"
+    fi
+    moved+=("$item")
+  done
+  if ! mv -- "$tmp" "$root/rounds/001"; then
+    for rollback_item in "${moved[@]}"; do
+      mv -- "$tmp/$rollback_item" "$root/$rollback_item" || :
+    done
+    rmdir "$tmp" 2>/dev/null || :
+    die "failed to finalize migrated review round"
+  fi
+  if ! (write_series_index "$root"); then
+    for rollback_item in "${moved[@]}"; do
+      mv -- "$root/rounds/001/$rollback_item" \
+        "$root/$rollback_item" || :
+    done
+    rmdir "$root/rounds/001" 2>/dev/null || :
+    ((made_rounds == 0)) || rmdir "$root/rounds" 2>/dev/null || :
+    die "failed to publish migrated review series metadata"
+  fi
+  printf 'Migrated existing reviews to %s\n' "$root/rounds/001"
+}
+
+next_series_round() {
+  local root=$1
+  local dir
+  local latest=0
+  local number
+
+  for dir in "$root"/rounds/[0-9][0-9][0-9]; do
+    [[ -d "$dir" ]] || continue
+    review_dir_is_generated "$dir" ||
+      die "incomplete review round: $dir"
+    number=$(basename -- "$dir")
+    number=$((10#$number))
+    ((number > latest)) && latest=$number
+  done
+  latest=$((latest + 1))
+  ((latest <= 999)) || die "review series cannot exceed 999 rounds"
+  printf -v SERIES_ROUND '%03d' "$latest"
+  SERIES_ROUND_DIR=$root/rounds/$SERIES_ROUND
+  SERIES_STAGE_DIR=$(mktemp -d \
+    "$root/rounds/.${SERIES_ROUND}.tmp.XXXXXX") ||
+    die "failed to stage review round $SERIES_ROUND"
+  OUTPUT_DIR=$SERIES_STAGE_DIR
+}
+
+publish_series_round() {
+  [[ -n "$SERIES_STAGE_DIR" ]] || return 0
+  [[ ! -e "$SERIES_ROUND_DIR" ]] ||
+    die "review round already exists: $SERIES_ROUND_DIR"
+  mv -- "$SERIES_STAGE_DIR" "$SERIES_ROUND_DIR" ||
+    die "failed to publish review round $SERIES_ROUND"
+  SERIES_STAGE_DIR=
+  OUTPUT_DIR=$SERIES_ROUND_DIR
+  INDEX=$OUTPUT_DIR/README.md
+  FAILURES=$OUTPUT_DIR/failures.tsv
+}
+
+extract_prior_skips() {
+  local decisions=$1
+
+  awk '
+    /^## / {
+      if (entry ~ /\n- Decision: .*([Ss]kip)/) printf "%s", entry
+      entry = $0 "\n"
+      next
+    }
+    {entry = entry $0 "\n"}
+    END {
+      if (entry ~ /\n- Decision: .*([Ss]kip)/) printf "%s", entry
+    }
+  ' "$decisions"
+}
 
 if [[ -n "$MODEL_OPT" || -n "$EFFORT_OPT" ]]; then
   [[ "$ENGINE" != all ]] || die \
@@ -185,9 +629,6 @@ git rev-parse --verify "${HEAD_REF}^{commit}" >/dev/null 2>&1 ||
   die "invalid head: $HEAD_REF"
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
-mkdir -p "$OUTPUT_DIR"
-OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd)
-
 COMMITS=()
 while IFS= read -r line; do
   COMMITS+=("$line")
@@ -196,6 +637,53 @@ if ((LIMIT > 0 && ${#COMMITS[@]} > LIMIT)); then
   COMMITS=("${COMMITS[@]:0:LIMIT}")
 fi
 ((${#COMMITS[@]})) || { echo "No commits in $BASE_REF..$HEAD_REF"; exit 0; }
+
+mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR=$(CDPATH='' cd -- "$OUTPUT_DIR" && pwd -P)
+if review_dir_is_series "$OUTPUT_DIR"; then
+  if ((CONTINUE_SERIES == 0)) &&
+      ! series_matches_context "$OUTPUT_DIR"; then
+    die "existing review series does not match: $MATCH_REASON;" \
+      "use --continue-series to override"
+  fi
+  SERIES_ROOT=$OUTPUT_DIR
+elif review_dir_is_generated "$OUTPUT_DIR"; then
+  if ((CONTINUE_SERIES == 0)) &&
+      ! review_dir_matches_range "$OUTPUT_DIR"; then
+    die "existing reviews do not match: $MATCH_REASON; use" \
+      "--continue-series to override or choose another --output"
+  fi
+  SERIES_ROOT=$OUTPUT_DIR
+  migrate_flat_review "$SERIES_ROOT"
+else
+  output_dir_status=0
+  directory_is_empty "$OUTPUT_DIR" || output_dir_status=$?
+  case "$output_dir_status" in
+    0)
+      if ((FORCE_SERIES)); then
+        SERIES_ROOT=$OUTPUT_DIR
+        mkdir -p "$SERIES_ROOT/rounds"
+        write_series_index "$SERIES_ROOT"
+      fi
+      ;;
+    1)
+      die "output directory is not a Casual Review directory: $OUTPUT_DIR"
+      ;;
+    *)
+      die "cannot inspect output directory: $OUTPUT_DIR"
+      ;;
+  esac
+fi
+
+if [[ -n "$SERIES_ROOT" ]]; then
+  next_series_round "$SERIES_ROOT"
+  if ((RECHECK_SKIPPED == 0)) &&
+      [[ -r "$SERIES_ROOT/DECISIONS.md" ]]; then
+    PRIOR_SKIPS=$(extract_prior_skips "$SERIES_ROOT/DECISIONS.md")
+  fi
+elif ((RECHECK_SKIPPED)); then
+  die "--recheck-skipped requires a review series"
+fi
 
 if git rev-list --min-parents=2 "${BASE_REF}..${HEAD_REF}" | grep -q .; then
   printf '%s%s\n' \
@@ -323,12 +811,26 @@ for commit in "${COMMITS[@]}"; do
     dir="$OUTPUT_DIR/$engine"; mkdir -p "$dir"
     output="$dir/$(printf '%03d' "$n")-$short.md"
     tmp=$(mktemp) || exit 1
-    trap 'rm -f "$tmp"' EXIT
+    PROMPT_TMP=$tmp
     write_file_from_command "$tmp" \
       sed -e "s/{{COMMIT}}/$commit/g" \
         -e "s/{{PARENT}}/$parent/g" \
         -e "s/{{SUBJECT}}/$safe_subject/g" \
         "$PROMPT_FILE"
+    if [[ -n "$PRIOR_SKIPS" ]]; then
+      {
+        cat <<'EOF_SKIPS'
+
+## Prior persistent skip decisions
+
+Do not report a semantically equivalent skipped finding when its relevant
+code and rationale remain unchanged. If later changes invalidate a prior
+decision, report the issue and explain why it is being reopened.
+
+EOF_SKIPS
+        printf '%s\n' "$PRIOR_SKIPS"
+      } >>"$tmp"
+    fi
     printf '[%d/%d] %-11s %s %s\n' \
       "$n" "${#COMMITS[@]}" "$engine" "$short" "$subject"
     if run_engine "$engine" "$tmp" "$output"; then result=OK; else
@@ -347,7 +849,8 @@ for commit in "${COMMITS[@]}"; do
     rel="$engine/$(basename "$output")"
     printf "| %d | \`%s\` | %s | %s | [%s](%s) |\n" \
       "$n" "$short" "$escaped" "$engine" "$result" "$rel" >>"$ROWS"
-    rm -f "$tmp"; trap - EXIT
+    rm -f "$tmp"
+    PROMPT_TMP=
   done
 done
 
@@ -365,9 +868,17 @@ done
 
 - Base: \`$BASE_REF\`
 - Head: \`$HEAD_REF\`
+- Base commit: \`$(git rev-parse "${BASE_REF}^{commit}")\`
+- Head commit: \`$(git rev-parse "${HEAD_REF}^{commit}")\`
 - Engines: ${engines[*]}
 - Commits: ${#COMMITS[@]}
 ${engine_config_lines}
+EOF2
+  if [[ -n "$SERIES_ROOT" ]]; then
+    printf -- "- Series: \`%s\`\n" "$SERIES_ROOT"
+    printf -- "- Round: \`%s\`\n" "$SERIES_ROUND"
+  fi
+  cat <<EOF2
 | # | Commit | Subject | Engine | Result |
 |---:|---|---|---|---|
 EOF2
@@ -377,9 +888,11 @@ rm -f "$ROWS"
 
 make_summary() {
   local engine=${SUMMARY_ENGINE:-}
+  local summary_dir=$OUTPUT_DIR
   if [[ -z "$engine" ]]; then
     [[ "$ENGINE" == all ]] && engine=codex || engine=$ENGINE
   fi
+  [[ -z "$SERIES_ROOT" ]] || summary_dir=$SERIES_ROUND_DIR
   local tmp
   tmp=$(mktemp) || return 1
   write_file_from_command "$tmp" \
@@ -391,7 +904,7 @@ make_summary() {
       "$(engine_effort "$engine")" \
       >>"$OUTPUT_DIR/SUMMARY.md"
     printf '\nSummary: %s (generated with %s)\n' \
-      "$OUTPUT_DIR/SUMMARY.md" "$engine"
+      "$summary_dir/SUMMARY.md" "$engine"
   else
     printf 'Warning: summary generation failed with %s\n' "$engine" >&2
   fi
@@ -399,6 +912,10 @@ make_summary() {
 }
 
 ((DO_SUMMARY == 0)) || make_summary
+if [[ -n "$SERIES_ROOT" ]]; then
+  publish_series_round
+  write_series_index "$SERIES_ROOT"
+fi
 printf 'Index: %s\n' "$INDEX"
 if [[ -s "$FAILURES" ]]; then
   printf 'Some reviews failed; see %s\n' "$FAILURES" >&2

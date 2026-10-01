@@ -24,10 +24,21 @@ tmp=$(mktemp -d)
 repo=$tmp/repo
 out=$tmp/out
 default_out=$tmp/default-out
+merge_out=$tmp/merge-out
+merge_repo=$tmp/merge-repo
+metadata_failure_out=$tmp/metadata-failure-out
+recovery_out=$tmp/recovery-out
 fake_claude=$tmp/claude
+git_calls=$tmp/git-calls
+git_wrapper_dir=$tmp/bin
 log=$tmp/review.log
 default_log=$tmp/default.log
+merge_log=$tmp/merge.log
+metadata_failure_log=$tmp/metadata-failure.log
+recovery_log=$tmp/recovery.log
 missing_log=$tmp/missing.log
+unsafe_log=$tmp/unsafe.log
+unreadable_log=$tmp/unreadable.log
 
 mkdir -p "$repo"
 (
@@ -40,16 +51,89 @@ mkdir -p "$repo"
   git commit -q -m base
   printf 'two\n' >file.txt
   git commit -am change -q
+  printf 'more\n' >other.txt
+  git add other.txt
+  git commit -q -m 'second change'
 )
 
 cat >"$fake_claude" <<'EOF_CLAUDE'
 #!/usr/bin/env bash
+if [[ -n "${MOCK_PROMPT_LOG:-}" ]]; then
+  cat >"$MOCK_PROMPT_LOG"
+fi
 printf '{invalid'
 exit 0
 EOF_CLAUDE
 chmod +x "$fake_claude"
 
-git -C "$repo" update-ref refs/remotes/origin/main HEAD~1
+real_git=$(command -v git)
+mkdir "$git_wrapper_dir"
+cat >"$git_wrapper_dir/git" <<'EOF_GIT'
+#!/usr/bin/env bash
+if [[ "$1" == show && "${2:-}" == --no-ext-diff &&
+    "${3:-}" == --pretty=format: ]]; then
+  printf '%s\n' "$*" >>"$MOCK_GIT_LOG"
+fi
+exec "$REAL_GIT" "$@"
+EOF_GIT
+chmod +x "$git_wrapper_dir/git"
+
+real_mv=$(command -v mv)
+mv_wrapper_dir=$tmp/mv-bin
+mkdir "$mv_wrapper_dir"
+cat >"$mv_wrapper_dir/mv" <<'EOF_MV'
+#!/usr/bin/env bash
+destination=
+for argument in "$@"; do
+  destination=$argument
+done
+case "$destination" in
+  */SERIES.md) exit 1 ;;
+esac
+exec "$REAL_MV" "$@"
+EOF_MV
+chmod +x "$mv_wrapper_dir/mv"
+
+git -C "$repo" update-ref refs/remotes/origin/main HEAD~2
+git -C "$repo" config remote.origin.url \
+  'https://user:token@example.com/org/repo.git?access_token=query-secret'
+unsafe_out=$tmp/unsafe-out
+mkdir "$unsafe_out"
+printf 'keep\n' >"$unsafe_out/.keep"
+if (
+    cd "$repo"
+    CASUAL_REVIEW_ENGINE=claude \
+    CLAUDE_BIN="$fake_claude" \
+    "$ROOT_DIR/bin/casual-review" review \
+      --head HEAD \
+      --output "$unsafe_out" \
+      --skip-summary
+  ) >/dev/null 2>"$unsafe_log";
+then
+  die "review accepted an unrelated hidden-only output directory"
+fi
+grep -Fq 'output directory is not a Casual Review directory' "$unsafe_log" ||
+  die "review did not reject an unrelated hidden-only output directory"
+
+unreadable_out=$tmp/unreadable-out
+mkdir "$unreadable_out"
+chmod 100 "$unreadable_out"
+if (
+    cd "$repo"
+    CASUAL_REVIEW_ENGINE=claude \
+    CLAUDE_BIN="$fake_claude" \
+    "$ROOT_DIR/bin/casual-review" review \
+      --head HEAD \
+      --output "$unreadable_out" \
+      --skip-summary
+  ) >/dev/null 2>"$unreadable_log";
+then
+  die "review accepted an unreadable output directory"
+fi
+chmod 700 "$unreadable_out"
+grep -Fq 'cannot inspect output directory' "$unreadable_log" ||
+  die "review did not fail closed for an unreadable output directory"
+
 if (
     cd "$repo"
     CASUAL_REVIEW_ENGINE=claude \
@@ -64,6 +148,243 @@ then
 fi
 grep -Fq -- "- Base: \`origin/main\`" "$default_out/README.md" ||
   die "review did not detect origin/main"
+
+mkdir "$merge_repo"
+(
+  cd "$merge_repo"
+  git init -q
+  git config user.email test@example.com
+  git config user.name 'Test User'
+  printf 'base\n' >base.txt
+  git add base.txt
+  git commit -q -m base
+  git branch topic
+  printf 'main\n' >main.txt
+  git add main.txt
+  git commit -q -m 'main change'
+  git switch -q topic
+  printf 'topic\n' >topic.txt
+  git add topic.txt
+  git commit -q -m 'topic change'
+  git switch -q master
+  git merge --no-ff -q topic -m 'merge topic'
+)
+merge_base=$(git -C "$merge_repo" rev-list --max-parents=0 HEAD)
+git -C "$merge_repo" update-ref refs/remotes/origin/main "$merge_base"
+if (
+    cd "$merge_repo"
+    CASUAL_REVIEW_ENGINE=claude \
+    CLAUDE_BIN="$fake_claude" \
+    "$ROOT_DIR/bin/casual-review" review \
+      --head HEAD \
+      --output "$merge_out" \
+      --skip-summary
+  ) >/dev/null 2>"$merge_log";
+then
+  die "merge review accepted invalid Claude JSON"
+fi
+old_merge=$(git -C "$merge_repo" rev-parse HEAD)
+git -C "$merge_repo" commit --amend -q \
+  -m 'merge topic' -m 'rewritten merge'
+new_merge=$(git -C "$merge_repo" rev-parse HEAD)
+[[ "$old_merge" != "$new_merge" ]] || die "merge commit was not rewritten"
+if (
+    cd "$merge_repo"
+    CASUAL_REVIEW_ENGINE=claude \
+    CLAUDE_BIN="$fake_claude" \
+    "$ROOT_DIR/bin/casual-review" review \
+      --head HEAD \
+      --output "$merge_out" \
+      --skip-summary
+  ) >/dev/null 2>>"$merge_log";
+then
+  die "rewritten merge review accepted invalid Claude JSON"
+fi
+[[ -r "$merge_out/rounds/002/README.md" ]] ||
+  die "review rejected a corresponding rewritten merge range"
+
+cp -R "$default_out" "$metadata_failure_out"
+if (
+    cd "$repo"
+    CASUAL_REVIEW_ENGINE=claude \
+    CLAUDE_BIN="$fake_claude" \
+    PATH="$mv_wrapper_dir:$PATH" \
+    REAL_MV="$real_mv" \
+    "$ROOT_DIR/bin/casual-review" review \
+      --head HEAD \
+      --output "$metadata_failure_out" \
+      --skip-summary
+  ) >/dev/null 2>"$metadata_failure_log";
+then
+  die "review accepted failed series metadata publication"
+fi
+grep -Fq 'failed to publish migrated review series metadata' \
+  "$metadata_failure_log" ||
+  die "review did not report failed series metadata publication"
+[[ -r "$metadata_failure_out/README.md" ]] ||
+  die "review did not restore flat metadata after migration failure"
+[[ ! -e "$metadata_failure_out/SERIES.md" ]] ||
+  die "review left series metadata after migration failure"
+[[ ! -e "$metadata_failure_out/rounds" ]] ||
+  die "review left rounds after migration failure"
+
+if (
+    cd "$repo"
+    CASUAL_REVIEW_ENGINE=claude \
+    CLAUDE_BIN="$tmp/missing-claude" \
+    "$ROOT_DIR/bin/casual-review" review \
+      --series \
+      --head HEAD \
+      --output "$recovery_out" \
+      --skip-summary
+  ) >/dev/null 2>"$recovery_log";
+then
+  die "review accepted a missing engine command"
+fi
+grep -Fq 'command not found' "$recovery_log" ||
+  die "review did not explain the missing engine command"
+for dir in "$recovery_out"/rounds/[0-9][0-9][0-9]; do
+  [[ ! -d "$dir" ]] || die "failed review published an incomplete round"
+done
+for dir in "$recovery_out"/rounds/.*.tmp.*; do
+  [[ ! -d "$dir" ]] || die "failed review left its staging directory"
+done
+mkdir "$recovery_out/rounds/.001.tmp.interrupted"
+printf 'partial\n' >"$recovery_out/rounds/.001.tmp.interrupted/output"
+if (
+    cd "$repo"
+    CASUAL_REVIEW_ENGINE=claude \
+    CLAUDE_BIN="$fake_claude" \
+    "$ROOT_DIR/bin/casual-review" review \
+      --head HEAD \
+      --output "$recovery_out" \
+      --skip-summary
+  ) >/dev/null 2>>"$recovery_log";
+then
+  die "review accepted invalid Claude JSON during retry"
+fi
+[[ -r "$recovery_out/rounds/001/README.md" ]] ||
+  die "review did not publish the retried first round"
+
+reviewed_commit=$(git -C "$repo" rev-parse --short=7 HEAD)
+cat >"$default_out/DECISIONS.md" <<EOF_DECISIONS
+## 2026-10-01T00:00:00Z - $reviewed_commit - Preserve behavior
+
+- Review file: \`$default_out/claude/001-$reviewed_commit.md\`
+- Reviewed commit: \`$reviewed_commit\`
+- Decision: Skip
+- Fix placement: None
+- Checks: not run: no change required
+- Reasoning: Existing behavior is intentional.
+EOF_DECISIONS
+duplicated_index=$tmp/duplicated-index
+awk '/^\| [0-9]+ \| `/ { print; print; next } { print }' \
+  "$default_out/README.md" >"$duplicated_index"
+mv "$duplicated_index" "$default_out/README.md"
+printf 'more revised\n' >"$repo/other.txt"
+git -C "$repo" commit -a --amend --no-edit -q
+prompt_log=$tmp/round-two-prompt.md
+if (
+    cd "$repo"
+    CASUAL_REVIEW_ENGINE=claude \
+    CLAUDE_BIN="$fake_claude" \
+    MOCK_GIT_LOG="$git_calls" \
+    MOCK_PROMPT_LOG="$prompt_log" \
+    PATH="$git_wrapper_dir:$PATH" \
+    REAL_GIT="$real_git" \
+    "$ROOT_DIR/bin/casual-review" review \
+      --head HEAD \
+      --output "$default_out" \
+      --skip-summary
+  ) >/dev/null 2>>"$default_log";
+then
+  die "review accepted invalid Claude JSON in round two"
+fi
+patch_id_calls=$(wc -l <"$git_calls" | tr -d ' ')
+[[ "$patch_id_calls" == 3 ]] ||
+  die "review repeated patch ID work for duplicate review rows"
+[[ -r "$default_out/SERIES.md" ]] ||
+  die "review did not create series metadata"
+grep -Fqx -- \
+  "- Repository: \`https://example.com/org/repo.git\`" \
+  "$default_out/SERIES.md" ||
+  die "review did not remove credentials from series metadata"
+if grep -Eq 'user:token|query-secret' "$default_out/SERIES.md"; then
+  die "review leaked credentials into series metadata"
+fi
+[[ -r "$default_out/rounds/001/README.md" ]] ||
+  die "review did not migrate the initial review"
+[[ -r "$default_out/rounds/002/README.md" ]] ||
+  die "review did not create the second round"
+[[ -r "$default_out/DECISIONS.md" ]] ||
+  die "review moved the cumulative decision log"
+grep -Fq 'Prior persistent skip decisions' "$prompt_log" ||
+  die "review did not pass prior skips to the next round"
+grep -Fq 'Existing behavior is intentional.' "$prompt_log" ||
+  die "review omitted prior skip reasoning"
+
+git -C "$repo" config remote.origin.url \
+  'https://example.com/org/repo.git#fragment-secret'
+if (
+    cd "$repo"
+    CASUAL_REVIEW_ENGINE=claude \
+    CLAUDE_BIN="$fake_claude" \
+    "$ROOT_DIR/bin/casual-review" review \
+      --head HEAD \
+      --output "$default_out" \
+      --skip-summary
+  ) >/dev/null 2>>"$default_log";
+then
+  die "review accepted invalid Claude JSON in round three"
+fi
+grep -Fqx -- \
+  "- Repository: \`https://example.com/org/repo.git\`" \
+  "$default_out/SERIES.md" ||
+  die "review did not remove URL fragment from series metadata"
+if grep -Fq 'fragment-secret' "$default_out/SERIES.md"; then
+  die "review leaked URL fragment into series metadata"
+fi
+
+git -C "$repo" reset --hard -q HEAD~1
+printf 'unrelated\n' >"$repo/unrelated.txt"
+git -C "$repo" add unrelated.txt
+git -C "$repo" commit -m unrelated -q
+if (
+    cd "$repo"
+    CASUAL_REVIEW_ENGINE=claude \
+    CLAUDE_BIN="$fake_claude" \
+    "$ROOT_DIR/bin/casual-review" review \
+      --head HEAD \
+      --output "$default_out" \
+      --skip-summary
+  ) >/dev/null 2>>"$default_log";
+then
+  die "review continued an unrelated series"
+fi
+grep -Fq 'existing review series does not match' "$default_log" ||
+  die "review did not explain the series mismatch"
+grep -Fq 'only 1 of 2 recorded commits correspond to the current range' \
+    "$default_log" ||
+  die "review did not report partial range correspondence"
+grep -Fq 'use --continue-series to override' "$default_log" ||
+  die "review did not report the series mismatch workaround"
+
+mkdir "$default_out/rounds/004"
+if (
+    cd "$repo"
+    CASUAL_REVIEW_ENGINE=claude \
+    CLAUDE_BIN="$fake_claude" \
+    "$ROOT_DIR/bin/casual-review" review \
+      --continue-series \
+      --head HEAD \
+      --output "$default_out" \
+      --skip-summary
+  ) >/dev/null 2>>"$default_log";
+then
+  die "review accepted an incomplete round"
+fi
+grep -Fq 'incomplete review round' "$default_log" ||
+  die "review did not explain the incomplete round"
 
 git -C "$repo" update-ref -d refs/remotes/origin/main
 if (
