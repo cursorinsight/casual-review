@@ -26,8 +26,10 @@ uncommitted user changes.
 2. Confirm the base branch exists.
 3. Identify review files and the reviewed commit hashes.
 4. Verify every reviewed commit is in the selected base-to-HEAD range.
-5. Read existing decisions before triage. Treat `Skip` and
-   `Inspect then skip` as persistent within the current review series.
+5. Read existing decisions before triage. Start correlation with
+   `Finding fingerprint`. Use `Change-Id` as a strong optional signal. Without
+   it, use `Reviewed subject`, range position, prior review metadata, and
+   semantic matching. Ask when the match is ambiguous.
 6. If the working tree has unrelated local changes, ask how to proceed.
 7. Create `DECISIONS.md` if it does not exist, but after creation only append to
    it. Never rewrite, reorder, or insert into the middle of this file.
@@ -38,15 +40,18 @@ Process comments one at a time, in review-file order.
 
 For each actionable review comment:
 
-0. Compare it with prior persistent skip decisions. If it is clearly the same
-   issue and the relevant code and rationale are unchanged, carry the skip
-   forward without asking and without appending a duplicate decision. If the
-   match is ambiguous, ask. If later changes invalidate the old reasoning,
+0. Ignore findings and questions with a `Reconciliation` field; the final pass
+   verified them against final HEAD and consumers suppress them. Compare each
+   actionable finding with prior persistent skip decisions. If it is clearly
+   the same issue and the relevant code and rationale are unchanged, carry the
+   skip forward without asking and without appending a duplicate decision. If
+   the match is ambiguous, ask. If later changes invalidate the old reasoning,
    explain why and process it as a reopened finding.
 
 1. Show the user the review comment, including:
    - review file;
    - reviewed commit hash;
+   - reviewed subject, finding fingerprint, and Change-Id when present;
    - affected file and line, if present;
    - severity, confidence, and requested action, if present;
    - the proposed Gerrit comment text.
@@ -90,6 +95,9 @@ Use this append-only decision-log format:
 
 - Review file: `<path>`
 - Reviewed commit: `<7-char hash>`
+- Reviewed subject: `<commit subject>`
+- Change-Id: `<Gerrit Change-Id>` or `none`
+- Finding fingerprint: `<path>::<nearest-symbol>` or `none`
 - Decision: Fix / Skip / Inspect then fix / Inspect then skip
 - Fix placement: Reviewed commit / Standalone / None
 - Checks: `<commands run>` or `not run: <reason>`

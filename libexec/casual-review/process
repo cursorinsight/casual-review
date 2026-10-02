@@ -166,8 +166,10 @@ reviews_outside_repo() {
 run_codex() {
   local bin=${CODEX_BIN:-codex}
   local -a add_dir=()
+  local prompt_text
 
   need "$bin"
+  prompt_text=$(read_prompt_argument "$PROMPT_TMP") || return 1
   build_engine_arg_arrays codex
   reviews_outside_repo && add_dir=(--add-dir "$REVIEW_ACCESS_DIR")
   "$bin" \
@@ -177,13 +179,15 @@ run_codex() {
     "${ENGINE_EFFORT_ARGS[@]}" \
     "${add_dir[@]}" \
     "${ENGINE_EXTRA_ARGS[@]}" \
-    "$(cat "$PROMPT_TMP")"
+    "$prompt_text"
 }
 
 run_claude() {
   local bin=${CLAUDE_BIN:-claude}
+  local prompt_text
 
   need "$bin"
+  prompt_text=$(read_prompt_argument "$PROMPT_TMP") || return 1
   build_engine_arg_arrays claude
   (
     cd "$REPO_ROOT"
@@ -191,15 +195,17 @@ run_claude() {
       "${ENGINE_MODEL_ARGS[@]}" \
       "${ENGINE_EFFORT_ARGS[@]}" \
       "${ENGINE_EXTRA_ARGS[@]}" \
-      "$(cat "$PROMPT_TMP")"
+      "$prompt_text"
   )
 }
 
 run_antigravity() {
   local bin=${ANTIGRAVITY_BIN:-antigravity}
   local -a add_dir=()
+  local prompt_text
 
   need "$bin"
+  prompt_text=$(read_prompt_argument "$PROMPT_TMP") || return 1
   build_engine_arg_arrays antigravity
   reviews_outside_repo && add_dir=(--add-dir "$REVIEW_ACCESS_DIR")
   (
@@ -211,7 +217,7 @@ run_antigravity() {
       "${ENGINE_EFFORT_ARGS[@]}" \
       "${add_dir[@]}" \
       "${ENGINE_EXTRA_ARGS[@]}" \
-      "$(cat "$PROMPT_TMP")"
+      "$prompt_text"
   )
 }
 

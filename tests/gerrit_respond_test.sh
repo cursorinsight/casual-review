@@ -62,8 +62,35 @@ Suggested Gerrit comment:
 
 > Explain the new mode in the README.
 
+### [Major] Fixed downstream inline
+
+- Confidence: High
+- Location: `bin/fixed-inline:9`
+- Fingerprint: `bin/fixed-inline::main`
+- Reconciliation: Fixed downstream by `abcdef1`
+- Review action: Must fix
+
+Suggested Gerrit comment:
+
+> This annotated comment must never be matched.
+
+## Reconciled findings
+
+### [Major] Already fixed
+
+- Confidence: High
+- Location: `bin/fixed:12`
+- Fingerprint: `bin/fixed::main`
+- Review action: Must fix
+
+Suggested Gerrit comment:
+
+> This reconciled comment must never be matched.
+
 ## Questions
 
+- Is the old fallback still required?
+  - Reconciliation: Fixed downstream by `abcdef1`
 - Follow-up question?
 EOF_REVIEW
 cat >"$empty_review_file" <<'EOF_EMPTY_REVIEW'
@@ -219,6 +246,9 @@ parse_review_file "$review_file" ||
   die "respond test: review parse failed"
 [[ ${#COMMENT_PATHS[@]} -eq 2 ]] ||
   die "respond test: interleaved review comment count failed"
+[[ ${#QUESTION_TEXTS[@]} -eq 1 &&
+    "${QUESTION_TEXTS[0]}" == 'Follow-up question?' ]] ||
+  die "respond test: reconciled question was retained"
 comment_index=$(
   matching_review_comment_index "${DECISION_TITLES[0]}" "$review_file"
 ) ||

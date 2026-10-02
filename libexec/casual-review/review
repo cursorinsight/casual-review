@@ -34,7 +34,7 @@ Environment overrides:
   CODEX_MODEL, CLAUDE_MODEL, ANTIGRAVITY_MODEL
   CODEX_EFFORT, CLAUDE_EFFORT, ANTIGRAVITY_EFFORT
   CODEX_EXTRA_ARGS, CLAUDE_EXTRA_ARGS, ANTIGRAVITY_EXTRA_ARGS
-  SUMMARY_ENGINE      engine used for summary
+  SUMMARY_ENGINE      engine used for reconciliation and summary
                       (default: selected engine; codex for all)
 
 Examples:
@@ -81,6 +81,7 @@ HEAD_REF=HEAD
 OUTPUT_DIR=ai-reviews
 PROMPT_FILE="$PACKAGE_DIR/prompts/commit-review.md"
 SUMMARY_PROMPT="$PACKAGE_DIR/prompts/summary.md"
+RECONCILE_PROMPT="$PACKAGE_DIR/prompts/reconcile-reviews.md"
 LIMIT=0
 DO_SUMMARY=1
 MODEL_OPT=""
@@ -93,16 +94,22 @@ SERIES_ROOT=
 SERIES_ROUND=
 SERIES_ROUND_DIR=
 SERIES_STAGE_DIR=
+FLAT_OUTPUT_DIR=
+FLAT_STAGE_DIR=
 PROMPT_TMP=
-PRIOR_SKIPS=
+RECONCILIATION_TMP=
+PRIOR_DECISIONS=
 MATCH_REASON=
 CURRENT_CHANGE_IDS=()
 CURRENT_PATCH_IDS=()
 CURRENT_IDENTITIES_CACHED=0
+REVIEW_FILES=()
 
 cleanup_review_run() {
   [[ -z "$PROMPT_TMP" ]] || rm -f -- "$PROMPT_TMP"
+  [[ -z "$RECONCILIATION_TMP" ]] || rm -f -- "$RECONCILIATION_TMP"
   [[ -z "$SERIES_STAGE_DIR" ]] || rm -rf -- "$SERIES_STAGE_DIR"
+  [[ -z "$FLAT_STAGE_DIR" ]] || rm -rf -- "$FLAT_STAGE_DIR"
 }
 
 trap cleanup_review_run EXIT
@@ -183,9 +190,15 @@ working_branch() {
 }
 
 commit_change_id() {
-  git show -s --format=%B "$1" 2>/dev/null |
-    sed -n 's/^Change-Id:[[:space:]]*//p' |
-    sed -n '$p'
+  local change_id
+
+  change_id=$(
+    git show -s --format=%B "$1" 2>/dev/null |
+      sed -n 's/^Change-Id:[[:space:]]*//p' |
+      sed -n '$p'
+  )
+  [[ "$change_id" =~ ^I[0-9A-Fa-f]{40}$ ]] || return 0
+  printf '%s' "$change_id"
 }
 
 commit_patch_id() {
@@ -498,8 +511,8 @@ migrate_flat_review() {
   [[ ! -e "$root/rounds/001" && ! -e "$tmp" ]] ||
     die "cannot migrate: round 001 already exists"
   mkdir "$tmp"
-  for item in README.md SUMMARY.md failures.tsv codex claude antigravity \
-      gerrit-browser-upload; do
+  for item in README.md SUMMARY.md RECONCILIATION.json failures.tsv \
+      codex claude antigravity gerrit-browser-upload; do
     [[ -e "$root/$item" ]] || continue
     if ! mv -- "$root/$item" "$tmp/$item"; then
       for rollback_item in "${moved[@]}"; do
@@ -565,19 +578,49 @@ publish_series_round() {
   FAILURES=$OUTPUT_DIR/failures.tsv
 }
 
-extract_prior_skips() {
-  local decisions=$1
+publish_flat_run() {
+  local item
+  local name
+  local moved=()
 
-  awk '
+  [[ -n "$FLAT_STAGE_DIR" ]] || return 0
+  for item in "$FLAT_STAGE_DIR"/*; do
+    [[ -e "$item" ]] || continue
+    name=$(basename -- "$item")
+    if [[ -e "$FLAT_OUTPUT_DIR/$name" ]] ||
+        ! mv -- "$item" "$FLAT_OUTPUT_DIR/$name"; then
+      for name in "${moved[@]}"; do
+        mv -- "$FLAT_OUTPUT_DIR/$name" "$FLAT_STAGE_DIR/$name" || :
+      done
+      die "failed to publish review output"
+    fi
+    moved+=("$name")
+  done
+  rmdir "$FLAT_STAGE_DIR" || die "failed to remove review staging directory"
+  FLAT_STAGE_DIR=
+  OUTPUT_DIR=$FLAT_OUTPUT_DIR
+  INDEX=$OUTPUT_DIR/README.md
+  FAILURES=$OUTPUT_DIR/failures.tsv
+}
+
+extract_prior_decisions() {
+  local decisions=$1
+  local omit_skips=$2
+
+  awk -v omit_skips="$omit_skips" '
+    function emit() {
+      if (entry == "") return
+      if (!omit_skips || entry !~ /\n- Decision: .*([Ss]kip)/) {
+        printf "%s", entry
+      }
+    }
     /^## / {
-      if (entry ~ /\n- Decision: .*([Ss]kip)/) printf "%s", entry
+      emit()
       entry = $0 "\n"
       next
     }
-    {entry = entry $0 "\n"}
-    END {
-      if (entry ~ /\n- Decision: .*([Ss]kip)/) printf "%s", entry
-    }
+    entry != "" {entry = entry $0 "\n"}
+    END {emit()}
   ' "$decisions"
 }
 
@@ -599,6 +642,8 @@ fi
 need git
 [[ -r "$PROMPT_FILE" ]] || die "prompt not readable: $PROMPT_FILE"
 [[ -r "$SUMMARY_PROMPT" ]] || die "summary prompt not readable: $SUMMARY_PROMPT"
+[[ -r "$RECONCILE_PROMPT" ]] ||
+  die "reconciliation prompt not readable: $RECONCILE_PROMPT"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
   die "run inside a Git repository"
 if ((BASE_REF_SET == 0)); then
@@ -664,6 +709,11 @@ else
         SERIES_ROOT=$OUTPUT_DIR
         mkdir -p "$SERIES_ROOT/rounds"
         write_series_index "$SERIES_ROOT"
+      else
+        FLAT_OUTPUT_DIR=$OUTPUT_DIR
+        FLAT_STAGE_DIR=$(mktemp -d "${OUTPUT_DIR}.tmp.XXXXXX") ||
+          die "failed to stage review output"
+        OUTPUT_DIR=$FLAT_STAGE_DIR
       fi
       ;;
     1)
@@ -677,9 +727,9 @@ fi
 
 if [[ -n "$SERIES_ROOT" ]]; then
   next_series_round "$SERIES_ROOT"
-  if ((RECHECK_SKIPPED == 0)) &&
-      [[ -r "$SERIES_ROOT/DECISIONS.md" ]]; then
-    PRIOR_SKIPS=$(extract_prior_skips "$SERIES_ROOT/DECISIONS.md")
+  if [[ -r "$SERIES_ROOT/DECISIONS.md" ]]; then
+    PRIOR_DECISIONS=$(extract_prior_decisions \
+      "$SERIES_ROOT/DECISIONS.md" "$RECHECK_SKIPPED")
   fi
 elif ((RECHECK_SKIPPED)); then
   die "--recheck-skipped requires a review series"
@@ -766,11 +816,15 @@ run_claude() {
 
 run_antigravity() {
   local prompt=$1 output=$2
-  local bin=${ANTIGRAVITY_BIN:-antigravity}; need "$bin"
+  local prompt_text
+  local bin=${ANTIGRAVITY_BIN:-antigravity}
+
+  need "$bin"
+  prompt_text=$(read_prompt_argument "$prompt") || return 1
   build_engine_arg_arrays antigravity
   (
     cd "$REPO_ROOT"
-    "$bin" -p "$(cat "$prompt")" \
+    "$bin" -p "$prompt_text" \
       "${ENGINE_MODEL_ARGS[@]}" \
       "${ENGINE_EFFORT_ARGS[@]}" \
       "${ENGINE_EXTRA_ARGS[@]}" \
@@ -785,6 +839,609 @@ run_engine() {
     claude) run_claude "$prompt" "$output" ;;
     antigravity) run_antigravity "$prompt" "$output" ;;
   esac
+}
+
+post_review_engine() {
+  local engine=${SUMMARY_ENGINE:-}
+
+  if [[ -z "$engine" ]]; then
+    [[ "$ENGINE" == all ]] && engine=codex || engine=$ENGINE
+  fi
+  case "$engine" in
+    codex|claude|antigravity) printf '%s' "$engine" ;;
+    *) die "invalid SUMMARY_ENGINE: $engine" ;;
+  esac
+}
+
+build_reconciliation_prompt() {
+  local output=$1
+  local rel
+
+  {
+    cat "$RECONCILE_PROMPT"
+    printf '\n## Run inputs\n\n'
+    # shellcheck disable=SC2016
+    printf -- '- Final HEAD: `%s`\n' \
+      "$(git rev-parse "${HEAD_REF}^{commit}")"
+    # shellcheck disable=SC2016
+    printf -- '- Base: `%s`\n\n' \
+      "$(git rev-parse "${BASE_REF}^{commit}")"
+    printf '<decisions>\n%s\n</decisions>\n' \
+      "${PRIOR_DECISIONS:-None.}"
+    for rel in "${REVIEW_FILES[@]}"; do
+      printf '\n<review path="%s">\n' "$rel"
+      cat "$OUTPUT_DIR/$rel"
+      printf '\n</review>\n'
+    done
+  } >"$output"
+}
+
+validate_reconciliation_manifest() {
+  local manifest=$1
+  local expected=$2
+
+  jq -e --argjson expected "$expected" '
+    def resolution:
+      (.status == "fixed_downstream"
+        or .status == "prior_skip_valid"
+        or .status == "prior_fix_valid")
+      and (if .status == "fixed_downstream"
+        then (.commit
+          | type == "string" and test("^[0-9A-Fa-f]{7,40}$"))
+          and .decision == null
+        else .commit == null
+          and (.decision
+            | type == "string" and test("^## [^\\r\\n]+$"))
+        end);
+    type == "object"
+    and (keys == ["reviews"])
+    and (.reviews | type == "array" and length == $expected)
+    and ([.reviews[].path] | unique | length == $expected)
+    and all(.reviews[];
+      type == "object"
+      and (keys | sort) == [
+        "path", "questions", "reconciled", "verdict"
+      ]
+      and (.path | type == "string" and test("^[^\\r\\n]+$"))
+      and (.verdict == "Reject"
+        or .verdict == "Needs changes"
+        or .verdict == "Looks good with minor comments"
+        or .verdict == "LGTM")
+      and (.reconciled | type == "array")
+      and ([.reconciled[].ordinal] | unique | length)
+        == (.reconciled | length)
+      and all(.reconciled[];
+        type == "object"
+        and (keys | sort) == [
+          "commit", "decision", "fingerprint", "ordinal", "status"
+        ]
+        and (.ordinal
+          | type == "number" and . >= 1 and floor == .)
+        and (.fingerprint
+          | type == "string" and test("^[^\\r\\n]+$"))
+        and resolution
+      )
+      and (.questions | type == "array")
+      and ([.questions[].ordinal] | unique | length)
+        == (.questions | length)
+      and all(.questions[];
+        type == "object"
+        and (keys | sort) == [
+          "commit", "decision", "ordinal", "status", "text"
+        ]
+        and (.ordinal
+          | type == "number" and . >= 1 and floor == .)
+        and (.text | type == "string" and test("^[^\\r\\n]+$"))
+        and resolution
+      )
+    )
+  ' "$manifest" >/dev/null
+}
+
+review_file_expected() {
+  local wanted=$1
+  local rel
+
+  for rel in "${REVIEW_FILES[@]}"; do
+    [[ "$rel" != "$wanted" ]] || return 0
+  done
+  return 1
+}
+
+finding_fingerprint_at() {
+  local file=$1
+  local ordinal=$2
+
+  awk -v wanted="$ordinal" '
+    $0 == "## Findings" {
+      in_findings = 1
+      next
+    }
+    in_findings && /^## / {exit}
+    in_findings && /^### \[/ {
+      finding++
+      next
+    }
+    in_findings && finding == wanted && /^- Fingerprint: `/ {
+      value = $0
+      sub(/^- Fingerprint: `/, "", value)
+      sub(/`$/, "", value)
+      found++
+    }
+    END {
+      if (found != 1) exit 1
+      print value
+    }
+  ' "$file"
+}
+
+finding_severity_at() {
+  local file=$1
+  local ordinal=$2
+
+  awk -v wanted="$ordinal" '
+    $0 == "## Findings" {in_findings = 1; next}
+    in_findings && /^## / {exit}
+    in_findings && /^### \[/ {
+      finding++
+      if (finding == wanted) {
+        value = $0
+        sub(/^### \[/, "", value)
+        sub(/\].*$/, "", value)
+        print value
+        found++
+      }
+    }
+    END {if (found != 1) exit 1}
+  ' "$file"
+}
+
+review_finding_count() {
+  awk '
+    $0 == "## Findings" {in_findings = 1; next}
+    in_findings && /^## / {exit}
+    in_findings && /^### \[/ {count++}
+    END {print count + 0}
+  ' "$1"
+}
+
+question_text_at() {
+  local file=$1
+  local ordinal=$2
+
+  awk -v wanted="$ordinal" '
+    $0 == "## Questions" {in_questions = 1; next}
+    in_questions && /^## / {exit}
+    in_questions && /^- / {
+      question++
+      if (question == wanted) {
+        value = substr($0, 3)
+        print value
+        found++
+      }
+    }
+    END {if (found != 1) exit 1}
+  ' "$file"
+}
+
+review_question_count() {
+  awk '
+    $0 == "## Questions" {
+      if (seen) invalid = 1
+      seen = 1
+      in_questions = 1
+      next
+    }
+    in_questions && /^## / {exit}
+    !in_questions {next}
+    $0 == "" {next}
+    $0 == "None." {
+      if (none || count) invalid = 1
+      none = 1
+      next
+    }
+    /^- / {
+      if (none) invalid = 1
+      count++
+      question = 1
+      next
+    }
+    /^  / {
+      if (!question) invalid = 1
+      next
+    }
+    {invalid = 1}
+    END {
+      if (!seen || invalid || (!none && !count)) exit 1
+      print count + 0
+    }
+  ' "$1"
+}
+
+prior_decision_matches() {
+  local heading=$1
+  local fingerprint=$2
+  local kind=$3
+  local block
+  local decision_re
+  local matches
+  local recorded
+
+  [[ -n "$PRIOR_DECISIONS" ]] || return 1
+  matches=$(printf '%s\n' "$PRIOR_DECISIONS" |
+    grep -Fxc -- "$heading" || :)
+  [[ "$matches" == 1 ]] || return 1
+  block=$(printf '%s\n' "$PRIOR_DECISIONS" |
+    awk -v wanted="$heading" '
+      /^## / {selected = ($0 == wanted)}
+      selected {print}
+    ')
+  case "$kind" in
+    skip) decision_re='^- Decision: (Skip|Inspect then skip)$' ;;
+    fix)
+      decision_re='^- Decision: (Fix|Inspect then fix)$'
+      [[ "$(printf '%s\n' "$block" |
+        grep -Fxc -- '- Fix placement: Reviewed commit' || :)" == 1 ]] ||
+        return 1
+      ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "$block" |
+    grep -Eq "$decision_re" || return 1
+  # shellcheck disable=SC2016
+  recorded=$(printf '%s\n' "$block" |
+    sed -n 's/^- Finding fingerprint: `\([^`]*\)`$/\1/p' |
+    sed -n '1p')
+  [[ -z "$recorded" || "$recorded" == none ||
+    "$recorded" == "$fingerprint" ]]
+}
+
+validate_reconciliation_resolution() {
+  local status=$1
+  local commit=$2
+  local decision=$3
+  local fingerprint=$4
+  local reviewed_commit=$5
+  local resolved_commit
+
+  case "$status" in
+    fixed_downstream)
+      resolved_commit=$(git rev-parse --verify \
+        "${commit}^{commit}" 2>/dev/null) || return 1
+      [[ "$resolved_commit" != "$reviewed_commit" ]] || return 1
+      git merge-base --is-ancestor \
+        "$reviewed_commit" "$resolved_commit" || return 1
+      git merge-base --is-ancestor \
+        "$resolved_commit" "${HEAD_REF}^{commit}" || return 1
+      ;;
+    prior_skip_valid)
+      prior_decision_matches "$decision" "$fingerprint" skip
+      ;;
+    prior_fix_valid)
+      prior_decision_matches "$decision" "$fingerprint" fix
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+manifest_has_ordinal() {
+  local manifest=$1
+  local review=$2
+  local member=$3
+  local ordinal=$4
+
+  jq -e --argjson ordinal "$ordinal" \
+    ".reviews[$review].$member | any(.ordinal == \$ordinal)" \
+    "$manifest" >/dev/null
+}
+
+validate_reconciliation_verdict() {
+  local manifest=$1
+  local review=$2
+  local file=$3
+  local actual
+  local expected
+  local ordinal=1
+  local severity
+  local finding_count
+  local question_count
+  local active_questions=0
+  local critical=0
+  local major=0
+  local minor=0
+
+  finding_count=$(review_finding_count "$file") || return 1
+  while ((ordinal <= finding_count)); do
+    if ! manifest_has_ordinal \
+        "$manifest" "$review" reconciled "$ordinal"; then
+      severity=$(finding_severity_at "$file" "$ordinal") || return 1
+      case "$severity" in
+        Critical) critical=1 ;;
+        Major) major=1 ;;
+        Minor) minor=1 ;;
+        *) return 1 ;;
+      esac
+    fi
+    ordinal=$((ordinal + 1))
+  done
+
+  ordinal=1
+  question_count=$(review_question_count "$file") || return 1
+  while ((ordinal <= question_count)); do
+    manifest_has_ordinal \
+      "$manifest" "$review" questions "$ordinal" || active_questions=1
+    ordinal=$((ordinal + 1))
+  done
+
+  if ((critical)); then
+    expected=Reject
+  elif ((major)); then
+    expected='Needs changes'
+  elif ((minor || active_questions)); then
+    expected='Looks good with minor comments'
+  else
+    expected=LGTM
+  fi
+  actual=$(jq -r ".reviews[$review].verdict" "$manifest") || return 1
+  [[ "$actual" == "$expected" ]]
+}
+
+validate_reconciliation_targets() {
+  local manifest=$1
+  local i=0
+  local j
+  local review_count
+  local finding_count
+  local question_count
+  local rel
+  local ordinal
+  local fingerprint
+  local text
+  local status
+  local commit
+  local decision
+  local reviewed_commit
+  local actual_fingerprint
+  local file
+
+  review_count=$(jq '.reviews | length' "$manifest")
+  while ((i < review_count)); do
+    rel=$(jq -r ".reviews[$i].path" "$manifest")
+    review_file_expected "$rel" || return 1
+    file=$OUTPUT_DIR/$rel
+    [[ -f "$file" ]] || return 1
+    # shellcheck disable=SC2016
+    reviewed_commit=$(sed -n \
+      's/^- Commit: `\([0-9A-Fa-f]\{40\}\)`$/\1/p' "$file")
+    [[ -n "$reviewed_commit" ]] || return 1
+    finding_count=$(jq ".reviews[$i].reconciled | length" "$manifest")
+    j=0
+    while ((j < finding_count)); do
+      ordinal=$(jq -r \
+        ".reviews[$i].reconciled[$j].ordinal" "$manifest")
+      fingerprint=$(jq -r \
+        ".reviews[$i].reconciled[$j].fingerprint" "$manifest")
+      status=$(jq -r \
+        ".reviews[$i].reconciled[$j].status" "$manifest")
+      commit=$(jq -r \
+        ".reviews[$i].reconciled[$j].commit // \"\"" "$manifest")
+      decision=$(jq -r \
+        ".reviews[$i].reconciled[$j].decision // \"\"" "$manifest")
+      actual_fingerprint=$(finding_fingerprint_at "$file" "$ordinal") ||
+        return 1
+      [[ "$actual_fingerprint" == "$fingerprint" ]] || return 1
+      validate_reconciliation_resolution \
+        "$status" "$commit" "$decision" "$fingerprint" \
+        "$reviewed_commit" || return 1
+      j=$((j + 1))
+    done
+    question_count=$(jq ".reviews[$i].questions | length" "$manifest")
+    j=0
+    while ((j < question_count)); do
+      ordinal=$(jq -r \
+        ".reviews[$i].questions[$j].ordinal" "$manifest")
+      text=$(jq -r ".reviews[$i].questions[$j].text" "$manifest")
+      status=$(jq -r ".reviews[$i].questions[$j].status" "$manifest")
+      commit=$(jq -r \
+        ".reviews[$i].questions[$j].commit // \"\"" "$manifest")
+      decision=$(jq -r \
+        ".reviews[$i].questions[$j].decision // \"\"" "$manifest")
+      [[ "$(question_text_at "$file" "$ordinal")" == "$text" ]] ||
+        return 1
+      validate_reconciliation_resolution \
+        "$status" "$commit" "$decision" none "$reviewed_commit" ||
+        return 1
+      j=$((j + 1))
+    done
+    validate_reconciliation_verdict "$manifest" "$i" "$file" ||
+      return 1
+    i=$((i + 1))
+  done
+}
+
+reconciliation_annotation() {
+  case "$1" in
+    fixed_downstream)
+      # shellcheck disable=SC2016
+      printf 'Fixed downstream by `%s`' "${2:0:7}"
+      ;;
+    prior_skip_valid) printf 'Prior skip remains valid' ;;
+    prior_fix_valid) printf 'Prior fix remains valid' ;;
+    *) return 1 ;;
+  esac
+}
+
+annotate_reconciled_finding() {
+  local file=$1
+  local ordinal=$2
+  local fingerprint=$3
+  local status=$4
+  local commit=$5
+  local annotation
+  local target
+  local tmp=$file.reconcile.$$
+
+  target="- Fingerprint: \`$fingerprint\`"
+  annotation=$(reconciliation_annotation "$status" "$commit") || return 1
+  annotation="- Reconciliation: $annotation"
+  # shellcheck disable=SC2016
+  replace_file_from_filter "$file" "$tmp" \
+    awk -v wanted="$ordinal" -v target="$target" \
+      -v annotation="$annotation" '
+      $0 == "## Findings" {in_findings = 1}
+      in_findings && $0 != "## Findings" && /^## / {
+        in_findings = 0
+      }
+      in_findings && /^### \[/ {finding++}
+      in_findings && finding == wanted && $0 == target {
+        seen++
+        print
+        print annotation
+        next
+      }
+      {print}
+      END {if (seen != 1) exit 1}
+    '
+}
+
+annotate_reconciled_question() {
+  local file=$1
+  local ordinal=$2
+  local text=$3
+  local status=$4
+  local commit=$5
+  local annotation
+  local target="- $text"
+  local tmp=$file.question.$$
+
+  annotation=$(reconciliation_annotation "$status" "$commit") || return 1
+  annotation="  - Reconciliation: $annotation"
+  # shellcheck disable=SC2016
+  replace_file_from_filter "$file" "$tmp" \
+    awk -v wanted="$ordinal" -v target="$target" \
+      -v annotation="$annotation" '
+      function finish_question() {
+        if (question == wanted && !annotated) {
+          print annotation
+          annotated = 1
+        }
+      }
+      $0 == "## Questions" {in_questions = 1}
+      in_questions && $0 != "## Questions" && /^## / {
+        finish_question()
+        in_questions = 0
+      }
+      in_questions && /^- / {
+        finish_question()
+        question++
+        if (question == wanted && $0 != target) mismatch = 1
+      }
+      {print}
+      END {
+        finish_question()
+        if (!annotated || mismatch) exit 1
+      }
+    '
+}
+
+append_reconciled_verdict() {
+  local file=$1
+  local verdict=$2
+  local tmp=$file.verdict.$$
+
+  if ! {
+    cat "$file"
+    printf '\n## Final-HEAD reconciliation\n\n%s\n' "$verdict"
+  } >"$tmp"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  if ! mv -- "$tmp" "$file"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
+apply_reconciliation_manifest() {
+  local manifest=$1
+  local i=0
+  local j
+  local review_count
+  local finding_count
+  local question_count
+  local rel
+  local verdict
+  local ordinal
+  local fingerprint
+  local text
+  local status
+  local commit
+  local file
+
+  review_count=$(jq '.reviews | length' "$manifest")
+  while ((i < review_count)); do
+    rel=$(jq -r ".reviews[$i].path" "$manifest")
+    review_file_expected "$rel" || return 1
+    file=$OUTPUT_DIR/$rel
+    [[ -f "$file" ]] || return 1
+    verdict=$(jq -r ".reviews[$i].verdict" "$manifest")
+    finding_count=$(jq ".reviews[$i].reconciled | length" "$manifest")
+    j=0
+    while ((j < finding_count)); do
+      ordinal=$(jq -r \
+        ".reviews[$i].reconciled[$j].ordinal" "$manifest")
+      fingerprint=$(jq -r \
+        ".reviews[$i].reconciled[$j].fingerprint" "$manifest")
+      status=$(jq -r \
+        ".reviews[$i].reconciled[$j].status" "$manifest")
+      commit=$(jq -r \
+        ".reviews[$i].reconciled[$j].commit // \"\"" "$manifest")
+      annotate_reconciled_finding \
+        "$file" "$ordinal" "$fingerprint" "$status" "$commit" ||
+        return 1
+      j=$((j + 1))
+    done
+    question_count=$(jq ".reviews[$i].questions | length" "$manifest")
+    j=0
+    while ((j < question_count)); do
+      ordinal=$(jq -r \
+        ".reviews[$i].questions[$j].ordinal" "$manifest")
+      text=$(jq -r ".reviews[$i].questions[$j].text" "$manifest")
+      status=$(jq -r ".reviews[$i].questions[$j].status" "$manifest")
+      commit=$(jq -r \
+        ".reviews[$i].questions[$j].commit // \"\"" "$manifest")
+      annotate_reconciled_question \
+        "$file" "$ordinal" "$text" "$status" "$commit" || return 1
+      j=$((j + 1))
+    done
+    append_reconciled_verdict "$file" "$verdict" || return 1
+    i=$((i + 1))
+  done
+}
+
+reconcile_reviews() {
+  local engine
+  local prompt
+  local manifest
+
+  need jq
+  engine=$(post_review_engine)
+  prompt=$(mktemp) || return 1
+  manifest=$(mktemp) || { rm -f -- "$prompt"; return 1; }
+  PROMPT_TMP=$prompt
+  RECONCILIATION_TMP=$manifest
+  build_reconciliation_prompt "$prompt" || return 1
+  printf 'Reconciling %d reviews against final HEAD with %s\n' \
+    "${#REVIEW_FILES[@]}" "$engine"
+  run_engine "$engine" "$prompt" "$manifest" || return 1
+  validate_reconciliation_manifest \
+    "$manifest" "${#REVIEW_FILES[@]}" || return 1
+  validate_reconciliation_targets "$manifest" || return 1
+  apply_reconciliation_manifest "$manifest" || return 1
+  mv -- "$manifest" "$OUTPUT_DIR/RECONCILIATION.json" || return 1
+  RECONCILIATION_TMP=
+  rm -f -- "$prompt"
+  PROMPT_TMP=
 }
 
 engines=()
@@ -805,6 +1462,8 @@ for commit in "${COMMITS[@]}"; do
   n=$((n+1))
   parent=$(git rev-parse "${commit}^1")
   short=$(git rev-parse --short=12 "$commit")
+  change_id=$(commit_change_id "$commit")
+  [[ -n "$change_id" ]] || change_id=none
   subject=$(git log -1 --format=%s "$commit")
   safe_subject=$(printf '%s' "$subject" | sed 's/[&/]/\\&/g')
   for engine in "${engines[@]}"; do
@@ -815,22 +1474,9 @@ for commit in "${COMMITS[@]}"; do
     write_file_from_command "$tmp" \
       sed -e "s/{{COMMIT}}/$commit/g" \
         -e "s/{{PARENT}}/$parent/g" \
+        -e "s/{{CHANGE_ID}}/$change_id/g" \
         -e "s/{{SUBJECT}}/$safe_subject/g" \
         "$PROMPT_FILE"
-    if [[ -n "$PRIOR_SKIPS" ]]; then
-      {
-        cat <<'EOF_SKIPS'
-
-## Prior persistent skip decisions
-
-Do not report a semantically equivalent skipped finding when its relevant
-code and rationale remain unchanged. If later changes invalidate a prior
-decision, report the issue and explain why it is being reopened.
-
-EOF_SKIPS
-        printf '%s\n' "$PRIOR_SKIPS"
-      } >>"$tmp"
-    fi
     printf '[%d/%d] %-11s %s %s\n' \
       "$n" "${#COMMITS[@]}" "$engine" "$short" "$subject"
     if run_engine "$engine" "$tmp" "$output"; then result=OK; else
@@ -847,12 +1493,19 @@ EOF_SKIPS
       >>"$output"
     escaped=${subject//|/\\|}
     rel="$engine/$(basename "$output")"
+    [[ "$result" != OK ]] || REVIEW_FILES+=("$rel")
     printf "| %d | \`%s\` | %s | %s | [%s](%s) |\n" \
       "$n" "$short" "$escaped" "$engine" "$result" "$rel" >>"$ROWS"
     rm -f "$tmp"
     PROMPT_TMP=
   done
 done
+
+if [[ ! -s "$FAILURES" ]]; then
+  if ((${#COMMITS[@]} > 1)) || [[ -n "$PRIOR_DECISIONS" ]]; then
+    reconcile_reviews || die "final-HEAD reconciliation failed"
+  fi
+fi
 
 # Written after the loop so the engine-config lines below reflect the real
 # resolved model/effort (populated by run_codex/run_claude on their first
@@ -887,11 +1540,9 @@ EOF2
 rm -f "$ROWS"
 
 make_summary() {
-  local engine=${SUMMARY_ENGINE:-}
-  local summary_dir=$OUTPUT_DIR
-  if [[ -z "$engine" ]]; then
-    [[ "$ENGINE" == all ]] && engine=codex || engine=$ENGINE
-  fi
+  local engine
+  local summary_dir=${FLAT_OUTPUT_DIR:-$OUTPUT_DIR}
+  engine=$(post_review_engine)
   [[ -z "$SERIES_ROOT" ]] || summary_dir=$SERIES_ROUND_DIR
   local tmp
   tmp=$(mktemp) || return 1
@@ -915,6 +1566,8 @@ make_summary() {
 if [[ -n "$SERIES_ROOT" ]]; then
   publish_series_round
   write_series_index "$SERIES_ROOT"
+else
+  publish_flat_run
 fi
 printf 'Index: %s\n' "$INDEX"
 if [[ -s "$FAILURES" ]]; then

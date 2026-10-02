@@ -195,6 +195,21 @@ strip_api_credit_env() {
   unset ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY GEMINI_API_KEY
 }
 
+read_prompt_argument() {
+  local file=$1
+  local bytes
+  local max_bytes=122880
+
+  bytes=$(wc -c <"$file") || return 1
+  # Linux limits each exec argument to 128 KiB, including its terminator.
+  if ((bytes > max_bytes)); then
+    printf 'Error: prompt is too large for an argv-based engine' >&2
+    printf ' (%s > %s bytes)\n' "$bytes" "$max_bytes" >&2
+    return 1
+  fi
+  cat "$file"
+}
+
 ENGINE_MODEL_ARGS=()
 ENGINE_EFFORT_ARGS=()
 ENGINE_EXTRA_ARGS=()

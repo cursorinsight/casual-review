@@ -156,6 +156,7 @@ COMMENT_CONFIDENCES=()
 COMMENT_ACTIONS=()
 COMMENT_LOCATIONS=()
 QUESTION_TEXTS=()
+QUESTION_RECONCILIATION=
 
 MATCH_COMMENT_ID=
 PENDING_COMMITS=()
@@ -470,6 +471,7 @@ reset_review() {
   COMMENT_ACTIONS=()
   COMMENT_LOCATIONS=()
   QUESTION_TEXTS=()
+  QUESTION_RECONCILIATION=
 }
 
 append_finding_comment_line() {
@@ -485,10 +487,12 @@ append_finding_comment_line() {
 finish_question() {
   local idx
 
-  [[ -n "$QUESTION_TEXT" ]] || return 0
-  idx=${#QUESTION_TEXTS[@]}
-  QUESTION_TEXTS[idx]=$QUESTION_TEXT
+  if [[ -n "$QUESTION_TEXT" && -z "$QUESTION_RECONCILIATION" ]]; then
+    idx=${#QUESTION_TEXTS[@]}
+    QUESTION_TEXTS[idx]=$QUESTION_TEXT
+  fi
   QUESTION_TEXT=
+  QUESTION_RECONCILIATION=
 }
 
 start_question() {
@@ -578,6 +582,7 @@ finish_comment() {
     return 0
   fi
   COMMENT_STORED=1
+  [[ -z "$FINDING_RECONCILIATION" ]] || return 0
   if [[ -z "$FINDING_COMMENT" || -z "$FINDING_PATH" ]]; then
     return 0
   fi
@@ -602,6 +607,7 @@ start_finding() {
   FINDING_ACTION=
   FINDING_COMMENT=
   FINDING_LOCATION=
+  FINDING_RECONCILIATION=
   HAVE_FINDING=1
   COMMENT_STORED=0
   COLLECT_COMMENT=0
@@ -612,7 +618,8 @@ parse_review_file() {
   local line
   local in_findings=0
   local in_questions=0
-  local commit_re heading_re location_re confidence_re action_re engine_re
+  local commit_re heading_re location_re confidence_re action_re
+  local reconciliation_re engine_re
   local location_text
 
   reset_review
@@ -628,13 +635,16 @@ parse_review_file() {
   FINDING_ACTION=
   FINDING_COMMENT=
   FINDING_LOCATION=
+  FINDING_RECONCILIATION=
   QUESTION_TEXT=
+  QUESTION_RECONCILIATION=
 
   commit_re="^(- )?Commit: \`([0-9A-Fa-f]{40})\`"
   heading_re='^### \[([^]]+)\] (.*)$'
   location_re='^- Location: (.*)$'
   confidence_re='^- Confidence: (.*)$'
   action_re='^- (Gerrit action|Review action): (.*)$'
+  reconciliation_re='^- Reconciliation: (.*)$'
   engine_re='^_Engine: ([^[:space:]]+)'
 
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -661,6 +671,7 @@ parse_review_file() {
         COLLECT_COMMENT=0
         continue
         ;;
+      "## Reconciled findings"|"## Final-HEAD reconciliation"|\
       "## Positive observations"|"## Review verdict"|"---")
         finish_comment
         finish_question
@@ -675,6 +686,9 @@ parse_review_file() {
       case "$line" in
         "- "*)
           start_question "${line#- }"
+          ;;
+        "  - Reconciliation: "*)
+          QUESTION_RECONCILIATION=${line#  - Reconciliation: }
           ;;
         "  "*)
           append_question_line "${line#  }"
@@ -711,6 +725,8 @@ parse_review_file() {
         fi
       elif [[ $line =~ $action_re ]]; then
         FINDING_ACTION=${BASH_REMATCH[2]}
+      elif [[ $line =~ $reconciliation_re ]]; then
+        FINDING_RECONCILIATION=${BASH_REMATCH[1]}
       elif [[ $line == "Suggested Gerrit comment:" ||
           $line == "Suggested review comment:" ]]; then
         COLLECT_COMMENT=1

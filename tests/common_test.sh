@@ -102,6 +102,17 @@ replace_file_from_filter "$helper_out" "$tmp/filter.tmp" tr a-z A-Z ||
 [[ "$(cat "$helper_out")" == LOWER ]] ||
   die "common test: successful filter replace content failed"
 
+printf 'small prompt\n' >"$tmp/small-prompt"
+[[ "$(read_prompt_argument "$tmp/small-prompt")" == 'small prompt' ]] ||
+  die "common test: prompt argument reader failed"
+dd if=/dev/zero of="$tmp/large-prompt" bs=122881 count=1 2>/dev/null
+if read_prompt_argument "$tmp/large-prompt" >/dev/null 2>"$tmp/prompt-error";
+then
+  die "common test: oversized prompt argument accepted"
+fi
+grep -Fq 'prompt is too large for an argv-based engine' \
+  "$tmp/prompt-error" || die "common test: prompt size error missing"
+
 apply_engine_overrides codex codex-model xhigh
 [[ "${CODEX_MODEL:-}" == codex-model ]] ||
   die "common test: codex model override failed"

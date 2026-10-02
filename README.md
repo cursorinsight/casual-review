@@ -146,6 +146,7 @@ ai-reviews/
 └── rounds/
     ├── 001/
     │   ├── README.md
+    │   ├── RECONCILIATION.json
     │   └── ...
     └── 002/
         ├── README.md
@@ -165,16 +166,29 @@ cannot be matched automatically after commits are amended unless a Gerrit
 then pass `--continue-series` to migrate it deliberately; this bypasses the
 commit identity guard.
 
-New rounds are staged in a hidden directory and published after their index is
-complete, so an interrupted run can be retried without manual repair.
+New flat output and new rounds are staged and published after their index is
+complete, so a failed run can be retried without manual repair.
 The initial flat-to-series migration is not interruption-safe. Terminating it
 can leave a partial `rounds/.001.tmp` or `rounds/001` state that requires
 manual repair before retrying.
 
 `DECISIONS.md` remains at the series root and accumulates decisions across
-rounds. Prior skip decisions are supplied to later reviews so unchanged
-findings are not reported repeatedly. Pass `--recheck-skipped` to review them
-again.
+rounds. Commit-local review calls do not receive that growing history. After
+they finish, one final pass receives the completed round and prior decisions,
+then reconciles findings against final `HEAD`. Correlation starts with a
+`path::symbol` fingerprint; a per-review ordinal disambiguates findings in the
+same symbol. Gerrit `Change-Id` is a strong optional signal;
+repositories without one use the reviewed subject, range position, prior
+review metadata, and semantic matching.
+
+The final pass writes a validated `RECONCILIATION.json`, marks findings and
+questions fixed downstream or covered by a still-valid prior decision, and
+appends a verdict derived from the remaining items. Upload and processing
+commands ignore marked items. Prior skips remain active while their code and
+rationale are unchanged. Prior fixes are revalidated against current code.
+Pass `--recheck-skipped` to omit skip decisions from reconciliation and review
+them again. Reconciliation requires `jq` and runs once when the range has
+multiple commits or the series has prior decisions.
 
 ## 🔄 Processing Review Feedback
 
@@ -201,6 +215,9 @@ Set `CASUAL_REVIEW_ENGINE` to choose the default engine without a flag.
 For a review series, the latest completed round is processed by default and
 decisions are appended to the root `DECISIONS.md`. Use `--round N` to process
 another round.
+New decisions record the reviewed subject, optional Gerrit `Change-Id`, and
+finding `path::symbol` fingerprint so later rounds can correlate rewritten
+commits in Gerrit and non-Gerrit repositories.
 
 ## 📤 Uploading to Gerrit
 
@@ -575,7 +592,7 @@ Because extra arguments are split by the shell script on whitespace, use them
 for simple flags only. For complex quoting, make a wrapper executable and point
 `CODEX_BIN`, `CLAUDE_BIN`, or `ANTIGRAVITY_BIN` to it.
 
-Choose another engine for the aggregate summary:
+Choose another engine for final reconciliation and the aggregate summary:
 
 ```bash
 SUMMARY_ENGINE=claude casual-review review --engine all

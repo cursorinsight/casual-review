@@ -67,6 +67,31 @@ Suggested Gerrit comment:
 
 > Explain the new mode in the README.
 
+### [Major] Fixed downstream inline
+
+- Confidence: High
+- Location: `bin/fixed-inline:9`
+- Fingerprint: `bin/fixed-inline::main`
+- Reconciliation: Fixed downstream by `abcdef1`
+- Review action: Must fix
+
+Suggested Gerrit comment:
+
+> This annotated comment must never be uploaded.
+
+## Reconciled findings
+
+### [Major] Already fixed
+
+- Confidence: High
+- Location: `bin/fixed:12`
+- Fingerprint: `bin/fixed::main`
+- Review action: Must fix
+
+Suggested Gerrit comment:
+
+> This reconciled comment must never be uploaded.
+
 ## Questions
 
 None.
@@ -104,6 +129,17 @@ parse_review_file "$file"
   die "upload test: file-level comment path failed"
 [[ -z "${COMMENT_LINES[1]}" ]] ||
   die "upload test: file-level comment line failed"
+reconciled_file=$tmp/reconciled-review.md
+cp -- "$file" "$reconciled_file"
+printf '\n## Final-HEAD reconciliation\n\nLGTM\n' >>"$reconciled_file"
+parse_review_file "$reconciled_file"
+[[ "$REVIEW_VERDICT" == LGTM ]] ||
+  die "upload test: reconciled verdict did not override original"
+[[ -z "$REVIEW_JUSTIFICATION" ]] ||
+  die "upload test: reconciled verdict retained stale justification"
+[[ ${#COMMENT_PATHS[@]} -eq 2 ]] ||
+  die "upload test: reconciled finding was uploaded"
+parse_review_file "$file"
 
 (
   cd "$tmp"
