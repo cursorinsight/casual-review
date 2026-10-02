@@ -11,6 +11,7 @@ Options:
   --interactive    ask before each Gerrit reply
   --yolo           post every matched decision automatically
   --limit N        process only the first N decision entries
+  --round N        process a specific round from a review series
   -h, --help       show help
 
 Required environment for --interactive and --yolo:
@@ -86,6 +87,9 @@ DUPLICATE_CHANGE_MESSAGES=0
 IGNORED_NO_COMMENTS=0
 FAILED_RESPONSES=0
 INTERACTIVE_TOTAL=0
+ROUND=
+SERIES_ROOT=
+SELECTED_ROUND=
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 while (($#)); do
@@ -97,6 +101,11 @@ while (($#)); do
     --limit)
       cli_require_value "$1" "${2-}" "$#"
       LIMIT=$2
+      shift 2
+      ;;
+    --round)
+      cli_require_value "$1" "${2-}" "$#"
+      ROUND=$2
       shift 2
       ;;
     -h|--help)
@@ -122,6 +131,7 @@ while (($#)); do
 done
 
 cli_validate_limit "$LIMIT"
+[[ -z "$ROUND" ]] || cli_validate_round "$ROUND"
 fi
 
 DECISION_TITLES=()
@@ -130,6 +140,7 @@ DECISION_REVIEWED_COMMITS=()
 DECISION_VALUES=()
 DECISION_FIX_COMMITS=()
 DECISION_SQUASH_TARGETS=()
+DECISION_FIX_PLACEMENTS=()
 DECISION_CHECKS=()
 DECISION_REASONINGS=()
 USED_COMMENT_KEYS=()
@@ -145,6 +156,7 @@ COMMENT_CONFIDENCES=()
 COMMENT_ACTIONS=()
 COMMENT_LOCATIONS=()
 QUESTION_TEXTS=()
+QUESTION_RECONCILIATION=
 
 MATCH_COMMENT_ID=
 PENDING_COMMITS=()
@@ -234,6 +246,9 @@ store_decision_field() {
     "Squash target")
       CURRENT_SQUASH_TARGET=$value
       ;;
+    "Fix placement")
+      CURRENT_FIX_PLACEMENT=$value
+      ;;
     "Checks")
       CURRENT_CHECKS=$value
       ;;
@@ -267,6 +282,11 @@ append_decision_continuation() {
         append_value "$CURRENT_SQUASH_TARGET" "$value"
       )
       ;;
+    "Fix placement")
+      CURRENT_FIX_PLACEMENT=$(
+        append_value "$CURRENT_FIX_PLACEMENT" "$value"
+      )
+      ;;
     "Checks")
       CURRENT_CHECKS=$(append_value "$CURRENT_CHECKS" "$value")
       ;;
@@ -283,6 +303,7 @@ reset_current_decision() {
   CURRENT_DECISION=
   CURRENT_FIX_COMMIT=
   CURRENT_SQUASH_TARGET=
+  CURRENT_FIX_PLACEMENT=
   CURRENT_CHECKS=
   CURRENT_REASONING=
   CURRENT_FIELD=
@@ -300,6 +321,7 @@ finish_current_decision() {
   DECISION_VALUES[idx]=$CURRENT_DECISION
   DECISION_FIX_COMMITS[idx]=$CURRENT_FIX_COMMIT
   DECISION_SQUASH_TARGETS[idx]=$CURRENT_SQUASH_TARGET
+  DECISION_FIX_PLACEMENTS[idx]=$CURRENT_FIX_PLACEMENT
   DECISION_CHECKS[idx]=$CURRENT_CHECKS
   DECISION_REASONINGS[idx]=$CURRENT_REASONING
 }
@@ -343,6 +365,11 @@ parse_decisions_file() {
       "- Squash target: "*)
         CURRENT_FIELD="Squash target"
         value=${line#"- Squash target: "}
+        store_decision_field "$CURRENT_FIELD" "$value"
+        ;;
+      "- Fix placement: "*)
+        CURRENT_FIELD="Fix placement"
+        value=${line#"- Fix placement: "}
         store_decision_field "$CURRENT_FIELD" "$value"
         ;;
       "- Checks: "*)
@@ -444,6 +471,7 @@ reset_review() {
   COMMENT_ACTIONS=()
   COMMENT_LOCATIONS=()
   QUESTION_TEXTS=()
+  QUESTION_RECONCILIATION=
 }
 
 append_finding_comment_line() {
@@ -459,10 +487,12 @@ append_finding_comment_line() {
 finish_question() {
   local idx
 
-  [[ -n "$QUESTION_TEXT" ]] || return 0
-  idx=${#QUESTION_TEXTS[@]}
-  QUESTION_TEXTS[idx]=$QUESTION_TEXT
+  if [[ -n "$QUESTION_TEXT" && -z "$QUESTION_RECONCILIATION" ]]; then
+    idx=${#QUESTION_TEXTS[@]}
+    QUESTION_TEXTS[idx]=$QUESTION_TEXT
+  fi
   QUESTION_TEXT=
+  QUESTION_RECONCILIATION=
 }
 
 start_question() {
@@ -552,6 +582,7 @@ finish_comment() {
     return 0
   fi
   COMMENT_STORED=1
+  [[ -z "$FINDING_RECONCILIATION" ]] || return 0
   if [[ -z "$FINDING_COMMENT" || -z "$FINDING_PATH" ]]; then
     return 0
   fi
@@ -576,6 +607,7 @@ start_finding() {
   FINDING_ACTION=
   FINDING_COMMENT=
   FINDING_LOCATION=
+  FINDING_RECONCILIATION=
   HAVE_FINDING=1
   COMMENT_STORED=0
   COLLECT_COMMENT=0
@@ -586,7 +618,8 @@ parse_review_file() {
   local line
   local in_findings=0
   local in_questions=0
-  local commit_re heading_re location_re confidence_re action_re engine_re
+  local commit_re heading_re location_re confidence_re action_re
+  local reconciliation_re engine_re
   local location_text
 
   reset_review
@@ -602,13 +635,16 @@ parse_review_file() {
   FINDING_ACTION=
   FINDING_COMMENT=
   FINDING_LOCATION=
+  FINDING_RECONCILIATION=
   QUESTION_TEXT=
+  QUESTION_RECONCILIATION=
 
   commit_re="^(- )?Commit: \`([0-9A-Fa-f]{40})\`"
   heading_re='^### \[([^]]+)\] (.*)$'
   location_re='^- Location: (.*)$'
   confidence_re='^- Confidence: (.*)$'
   action_re='^- (Gerrit action|Review action): (.*)$'
+  reconciliation_re='^- Reconciliation: (.*)$'
   engine_re='^_Engine: ([^[:space:]]+)'
 
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -635,6 +671,7 @@ parse_review_file() {
         COLLECT_COMMENT=0
         continue
         ;;
+      "## Reconciled findings"|"## Final-HEAD reconciliation"|\
       "## Positive observations"|"## Review verdict"|"---")
         finish_comment
         finish_question
@@ -649,6 +686,9 @@ parse_review_file() {
       case "$line" in
         "- "*)
           start_question "${line#- }"
+          ;;
+        "  - Reconciliation: "*)
+          QUESTION_RECONCILIATION=${line#  - Reconciliation: }
           ;;
         "  "*)
           append_question_line "${line#  }"
@@ -685,6 +725,8 @@ parse_review_file() {
         fi
       elif [[ $line =~ $action_re ]]; then
         FINDING_ACTION=${BASH_REMATCH[2]}
+      elif [[ $line =~ $reconciliation_re ]]; then
+        FINDING_RECONCILIATION=${BASH_REMATCH[1]}
       elif [[ $line == "Suggested Gerrit comment:" ||
           $line == "Suggested review comment:" ]]; then
         COLLECT_COMMENT=1
@@ -844,8 +886,10 @@ matching_review_comment_index() {
 resolve_review_file() {
   local file=$1
   local base
+  local legacy_relative=
   local match
   local found=
+  local series_root_abs=
   local count=0
 
   if [[ -f "$file" ]]; then
@@ -855,6 +899,28 @@ resolve_review_file() {
   if [[ -f "$REVIEW_DIR/$file" ]]; then
     printf '%s' "$REVIEW_DIR/$file"
     return 0
+  fi
+  if [[ -n "$SERIES_ROOT" && -f "$SERIES_ROOT/$file" ]]; then
+    printf '%s' "$SERIES_ROOT/$file"
+    return 0
+  fi
+  if [[ -n "$SERIES_ROOT" ]]; then
+    series_root_abs=$(
+      CDPATH='' cd -- "$SERIES_ROOT" && pwd -P
+    ) || return 1
+    case "$file" in
+      "$SERIES_ROOT"/*)
+        legacy_relative=${file#"$SERIES_ROOT"/}
+        ;;
+      "$series_root_abs"/*)
+        legacy_relative=${file#"$series_root_abs"/}
+        ;;
+    esac
+    if [[ -n "$legacy_relative" &&
+        -f "$REVIEW_DIR/$legacy_relative" ]]; then
+      printf '%s' "$REVIEW_DIR/$legacy_relative"
+      return 0
+    fi
   fi
 
   base=$(basename -- "$file")
@@ -887,6 +953,7 @@ build_response_message() {
   local checks=${DECISION_CHECKS[$i]:-not run: no checks recorded}
   local reasoning=${DECISION_REASONINGS[$i]:-}
   local fix_commit
+  local fix_placement=${DECISION_FIX_PLACEMENTS[$i]:-}
   local resolved
   local squash_target
   local message
@@ -895,8 +962,12 @@ build_response_message() {
   squash_target=$(format_commit_ref "${DECISION_SQUASH_TARGETS[$i]:-none}")
   resolved=$(decision_resolves_thread "$decision")
   message="**Decision:** $decision"
-  message+=$'\n'"**Fix commit:** $fix_commit"
-  message+=$'\n'"**Squash target:** $squash_target"
+  if [[ -n "$fix_placement" ]]; then
+    message+=$'\n'"**Fix placement:** $fix_placement"
+  else
+    message+=$'\n'"**Fix commit:** $fix_commit"
+    message+=$'\n'"**Squash target:** $squash_target"
+  fi
   message+=$'\n'"**Resolved:** $resolved"
   message+=$'\n'"**Checks:** $checks"
   [[ -z "$reasoning" ]] || message+=$'\n\n'"$reasoning"
@@ -1198,6 +1269,41 @@ limited_decision_total() {
   fi
 }
 
+decision_belongs_to_selected_round() {
+  local file=$1
+  local series_root_abs=
+
+  [[ -n "$SELECTED_ROUND" ]] || return 0
+  if [[ -n "$SERIES_ROOT" ]]; then
+    series_root_abs=$(
+      CDPATH='' cd -- "$SERIES_ROOT" && pwd -P
+    ) || return 1
+    case "$file" in
+      "$SERIES_ROOT"/*) file=${file#"$SERIES_ROOT"/} ;;
+      "$series_root_abs"/*) file=${file#"$series_root_abs"/} ;;
+    esac
+  fi
+  case "$file" in
+    rounds/"$SELECTED_ROUND"/*) return 0 ;;
+    rounds/[0-9][0-9][0-9]/*) return 1 ;;
+  esac
+  [[ "$SELECTED_ROUND" == 001 ]]
+}
+
+selected_decision_total() {
+  local i=0
+  local total=0
+
+  while ((i < ${#DECISION_TITLES[@]})); do
+    if decision_belongs_to_selected_round \
+        "${DECISION_REVIEW_FILES[$i]:-}"; then
+      total=$((total + 1))
+    fi
+    i=$((i + 1))
+  done
+  limited_decision_total "$total"
+}
+
 comment_location() {
   local comment_index=$1
   local line=${COMMENT_LINES[$comment_index]:-}
@@ -1219,9 +1325,9 @@ tui_response_preview() {
   local title
   local severity
 
-  progress=$(tui_progress_bar "$((i + 1))" "$INTERACTIVE_TOTAL")
+  progress=$(tui_progress_bar "$TOTAL_DECISIONS" "$INTERACTIVE_TOTAL")
   severity=$(tui_decision_color "${DECISION_VALUES[$i]}")
-  title="Decision $((i + 1))/$INTERACTIVE_TOTAL"
+  title="Decision $TOTAL_DECISIONS/$INTERACTIVE_TOTAL"
   title+=" - $(format_commit_ref "${DECISION_REVIEWED_COMMITS[$i]}")"
   title+=" - $(comment_location "$comment_index")"
 
@@ -1253,7 +1359,7 @@ print_response_preview() {
   fi
 
   line=${COMMENT_LINES[$comment_index]:-}
-  printf '\nDecision %s/%s\n' "$((i + 1))" "${#DECISION_TITLES[@]}"
+  printf '\nDecision %s/%s\n' "$TOTAL_DECISIONS" "$INTERACTIVE_TOTAL"
   printf '  Review file: %s\n' "$review_file"
   printf '  Commit: %s\n' \
     "$(format_commit_ref "${DECISION_REVIEWED_COMMITS[$i]}")"
@@ -1301,9 +1407,9 @@ tui_change_message_preview() {
   local title
   local severity
 
-  progress=$(tui_progress_bar "$((i + 1))" "$INTERACTIVE_TOTAL")
+  progress=$(tui_progress_bar "$TOTAL_DECISIONS" "$INTERACTIVE_TOTAL")
   severity=$(tui_decision_color "${DECISION_VALUES[$i]}")
-  title="Decision $((i + 1))/$INTERACTIVE_TOTAL"
+  title="Decision $TOTAL_DECISIONS/$INTERACTIVE_TOTAL"
   title+=" - $(format_commit_ref "${DECISION_REVIEWED_COMMITS[$i]}")"
   title+=" - change message"
 
@@ -1329,7 +1435,7 @@ print_change_message_preview() {
     return 0
   fi
 
-  printf '\nDecision %s/%s\n' "$((i + 1))" "${#DECISION_TITLES[@]}"
+  printf '\nDecision %s/%s\n' "$TOTAL_DECISIONS" "$INTERACTIVE_TOTAL"
   printf '  Review file: %s\n' "$review_file"
   printf '  Commit: %s\n' \
     "$(format_commit_ref "${DECISION_REVIEWED_COMMITS[$i]}")"
@@ -1349,6 +1455,8 @@ process_decision() {
   local prompt
   local decision_commit
 
+  decision_belongs_to_selected_round \
+    "${DECISION_REVIEW_FILES[$i]:-}" || return 0
   TOTAL_DECISIONS=$((TOTAL_DECISIONS + 1))
   if [[ -z "${DECISION_REVIEW_FILES[$i]:-}" ||
       -z "${DECISION_REVIEWED_COMMITS[$i]:-}" ]]; then
@@ -1612,12 +1720,21 @@ main() {
   else
     REVIEW_DIR=ai-reviews
   fi
+  [[ -d "$REVIEW_DIR" ]] || die "not a directory: $REVIEW_DIR"
+  if review_dir_is_series "$REVIEW_DIR"; then
+    SERIES_ROOT=$REVIEW_DIR
+    REVIEW_DIR=$(resolve_review_round "$SERIES_ROOT" "$ROUND")
+    SELECTED_ROUND=$(basename -- "$REVIEW_DIR")
+  else
+    REVIEW_DIR=$(resolve_review_round "$REVIEW_DIR" "$ROUND")
+  fi
   if ((DECISIONS_FILE_ARG_SET)); then
     [[ -n "$DECISIONS_FILE" ]] || die "DECISIONS_MD must not be empty"
+  elif [[ -n "$SERIES_ROOT" ]]; then
+    DECISIONS_FILE=$SERIES_ROOT/DECISIONS.md
   else
     DECISIONS_FILE=$REVIEW_DIR/DECISIONS.md
   fi
-  [[ -d "$REVIEW_DIR" ]] || die "not a directory: $REVIEW_DIR"
   [[ -r "$DECISIONS_FILE" ]] || die "not readable: $DECISIONS_FILE"
 
   reset_pending_queues
@@ -1636,7 +1753,9 @@ main() {
   parse_decisions_file "$DECISIONS_FILE"
   (( ${#DECISION_TITLES[@]} > 0 )) ||
     die "no decision entries found in $DECISIONS_FILE"
-  INTERACTIVE_TOTAL=$(limited_decision_total "${#DECISION_TITLES[@]}")
+  INTERACTIVE_TOTAL=$(selected_decision_total)
+  ((INTERACTIVE_TOTAL > 0)) ||
+    die "no decision entries found for $REVIEW_DIR"
 
   if [[ "$MODE" == interactive ]]; then
     tui_banner "$(tui_progress_bar 0 "$INTERACTIVE_TOTAL")"

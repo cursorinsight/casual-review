@@ -67,6 +67,31 @@ Suggested Gerrit comment:
 
 > Explain the new mode in the README.
 
+### [Major] Fixed downstream inline
+
+- Confidence: High
+- Location: `bin/fixed-inline:9`
+- Fingerprint: `bin/fixed-inline::main`
+- Reconciliation: Fixed downstream by `abcdef1`
+- Review action: Must fix
+
+Suggested Gerrit comment:
+
+> This annotated comment must never be uploaded.
+
+## Reconciled findings
+
+### [Major] Already fixed
+
+- Confidence: High
+- Location: `bin/fixed:12`
+- Fingerprint: `bin/fixed::main`
+- Review action: Must fix
+
+Suggested Gerrit comment:
+
+> This reconciled comment must never be uploaded.
+
 ## Questions
 
 None.
@@ -104,6 +129,17 @@ parse_review_file "$file"
   die "upload test: file-level comment path failed"
 [[ -z "${COMMENT_LINES[1]}" ]] ||
   die "upload test: file-level comment line failed"
+reconciled_file=$tmp/reconciled-review.md
+cp -- "$file" "$reconciled_file"
+printf '\n## Final-HEAD reconciliation\n\nLGTM\n' >>"$reconciled_file"
+parse_review_file "$reconciled_file"
+[[ "$REVIEW_VERDICT" == LGTM ]] ||
+  die "upload test: reconciled verdict did not override original"
+[[ -z "$REVIEW_JUSTIFICATION" ]] ||
+  die "upload test: reconciled verdict retained stale justification"
+[[ ${#COMMENT_PATHS[@]} -eq 2 ]] ||
+  die "upload test: reconciled finding was uploaded"
+parse_review_file "$file"
 
 (
   cd "$tmp"
@@ -128,6 +164,29 @@ env_all_output=$(
 )
 [[ "$env_all_output" == *"Dry-run payloads: 2"* ]] ||
   die "upload test: environment all-engine filter failed"
+
+series=$tmp/series
+mkdir -p "$series/rounds/001/codex" "$series/rounds/002/codex"
+printf '# Casual Review series\n' >"$series/SERIES.md"
+printf '# AI-assisted Gerrit commit reviews\n' \
+  >"$series/rounds/001/README.md"
+printf '# AI-assisted Gerrit commit reviews\n' \
+  >"$series/rounds/002/README.md"
+cp "$file" "$series/rounds/001/codex/001-old.md"
+cp "$file" "$series/rounds/001/codex/002-old.md"
+cp "$file" "$series/rounds/002/codex/001-new.md"
+series_output=$(
+  "$ROOT_DIR/bin/casual-review" gerrit upload \
+    --engine codex --dry-run "$series"
+)
+[[ "$series_output" == *"Dry-run payloads: 1"* ]] ||
+  die "upload test: series did not select latest round"
+round_output=$(
+  "$ROOT_DIR/bin/casual-review" gerrit upload \
+    --engine codex --round 1 --dry-run "$series"
+)
+[[ "$round_output" == *"Dry-run payloads: 2"* ]] ||
+  die "upload test: explicit series round failed"
 if (
   cd "$tmp"
 "$ROOT_DIR/bin/casual-review" gerrit upload \

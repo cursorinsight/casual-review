@@ -159,13 +159,18 @@ expect_status 0 "$tmp/casual-review" gerrit upload --help
 
 expect_status 1 "$CLI" review --engine ''
 expect_status 1 "$CLI" process --reviews ''
+expect_status 1 "$CLI" process --round ''
 expect_status 1 "$CLI" gerrit export --limit ''
+expect_status 1 "$CLI" gerrit export --round ''
 expect_status 1 "$CLI" gerrit upload --engine ''
+expect_status 1 "$CLI" gerrit upload --round ''
 expect_status 1 "$CLI" gerrit respond --limit ''
+expect_status 1 "$CLI" gerrit respond --round ''
 expect_status 1 "$CLI" github upload --pr ''
 expect_status 1 "$CLI" github upload --repo ''
 expect_status 1 "$CLI" github upload --engine ''
 expect_status 1 "$CLI" github upload --limit ''
+expect_status 1 "$CLI" github upload --round ''
 
 expect_status 0 "$CLI" completion bash
 bash -n "$tmp/stdout" || die "generated Bash completion is invalid"

@@ -9,26 +9,42 @@ cd "$ROOT_DIR" || exit 1
 shopt -s nullglob
 
 status=0
+PASS_MARK=.
+SKIP_MARK=s
+PASS_COUNT=0
+FAIL_COUNT=0
+SKIP_COUNT=0
 
-section() {
-  printf '\n== %s ==\n' "$*"
-}
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  PASS_MARK=$'\033[32m.\033[0m'
+  SKIP_MARK=$'\033[33ms\033[0m'
+fi
 
 pass() {
-  printf 'ok - %s\n' "$*"
+  printf '%s' "$PASS_MARK"
+  PASS_COUNT=$((PASS_COUNT + 1))
 }
 
-warn() {
-  printf 'warning: %s\n' "$*" >&2
+skip() {
+  printf '%s' "$SKIP_MARK"
+  SKIP_COUNT=$((SKIP_COUNT + 1))
 }
 
 fail() {
-  printf 'not ok - %s\n' "$*" >&2
+  printf '\nFAIL: %s\n' "$*" >&2
+  FAIL_COUNT=$((FAIL_COUNT + 1))
   status=1
 }
 
 docker_available() {
   command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+tool_is_usable() {
+  local tool=$1
+
+  command -v "$tool" >/dev/null 2>&1 &&
+    "$tool" --version >/dev/null 2>&1
 }
 
 run_docker_linter() {
@@ -57,11 +73,11 @@ run_linter() {
 
   shift 3
   if (( $# == 0 )); then
-    warn "$tool has no files to check; skipped"
-    return 0
+    printf '%s has no files to check' "$tool"
+    return 2
   fi
 
-  if command -v "$tool" >/dev/null 2>&1; then
+  if tool_is_usable "$tool"; then
     "$tool" "$@"
     return
   fi
@@ -71,8 +87,8 @@ run_linter() {
     return
   fi
 
-  warn "$tool not found and Docker daemon unavailable; skipped"
-  return 1
+  printf '%s not found and Docker daemon unavailable' "$tool"
+  return 2
 }
 
 run_checked_linter() {
@@ -80,13 +96,19 @@ run_checked_linter() {
   local tool=$2
   local image=$3
   local entrypoint=$4
+  local output
+  local result=0
 
   shift 4
-  section "$label"
-  if run_linter "$tool" "$image" "$entrypoint" "$@"; then
+  output=$(run_linter "$tool" "$image" "$entrypoint" "$@" 2>&1) ||
+    result=$?
+  if ((result == 0)); then
     pass "$label"
+  elif ((result == 2)); then
+    skip "$label"
   else
     fail "$label"
+    [[ -z "$output" ]] || printf '%s\n' "$output" >&2
   fi
 }
 
@@ -101,6 +123,7 @@ shellcheck_files=(
 )
 hadolint_files=(Dockerfile)
 
+printf 'checks: '
 run_checked_linter \
   "shellcheck" \
   shellcheck \
@@ -115,10 +138,7 @@ run_checked_linter \
   /bin/hadolint \
   "${hadolint_files[@]}"
 
-if (( status == 0 )); then
-  printf '\nAll checks passed.\n'
-else
-  printf '\nChecks failed.\n' >&2
-fi
+printf '\nSummary: %d passed, %d failed, %d skipped\n' \
+  "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT"
 
 exit "$status"
