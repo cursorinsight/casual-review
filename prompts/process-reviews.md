@@ -13,7 +13,8 @@ Default inputs:
   `ai-reviews/README.md` or `reviews/README.md`; ask before falling back to
   `main` or `master`
 - Working branch: the current branch, expected to be the `reviews` branch
-- Decision log: `ai-reviews/DECISIONS.md` or `reviews/DECISIONS.md`
+- Decision log: the explicit path supplied by the launcher, normally
+  `ai-reviews/DECISIONS.md` or `reviews/DECISIONS.md`
 
 If any input is missing, ambiguous, or surprising, ask before continuing. Do not
 assume. Do not modify the base branch. Do not push. Do not overwrite or discard
@@ -25,8 +26,12 @@ uncommitted user changes.
 2. Confirm the base branch exists.
 3. Identify review files and the reviewed commit hashes.
 4. Verify every reviewed commit is in the selected base-to-HEAD range.
-5. If the working tree has unrelated local changes, ask how to proceed.
-6. Create `DECISIONS.md` if it does not exist, but after creation only append to
+5. Read existing decisions before triage. Start correlation with
+   `Finding fingerprint`. Use `Change-Id` as a strong optional signal. Without
+   it, use `Reviewed subject`, range position, prior review metadata, and
+   semantic matching. Ask when the match is ambiguous.
+6. If the working tree has unrelated local changes, ask how to proceed.
+7. Create `DECISIONS.md` if it does not exist, but after creation only append to
    it. Never rewrite, reorder, or insert into the middle of this file.
 
 ## Stage 1: Triage and Fix Each Review Comment
@@ -35,9 +40,18 @@ Process comments one at a time, in review-file order.
 
 For each actionable review comment:
 
+0. Ignore findings and questions with a `Reconciliation` field; the final pass
+   verified them against final HEAD and consumers suppress them. Compare each
+   actionable finding with prior persistent skip decisions. If it is clearly
+   the same issue and the relevant code and rationale are unchanged, carry the
+   skip forward without asking and without appending a duplicate decision. If
+   the match is ambiguous, ask. If later changes invalidate the old reasoning,
+   explain why and process it as a reopened finding.
+
 1. Show the user the review comment, including:
    - review file;
    - reviewed commit hash;
+   - reviewed subject, finding fingerprint, and Change-Id when present;
    - affected file and line, if present;
    - severity, confidence, and requested action, if present;
    - the proposed Gerrit comment text.
@@ -48,7 +62,7 @@ For each actionable review comment:
 3. If the user chooses `inspect`, inspect the relevant commit and surrounding
    history, explain what you found, and ask again.
 4. If the user chooses `skip`, append the decision and reasoning to
-   `DECISIONS.md`, then move on.
+   `DECISIONS.md` with `Fix placement: None`, then move on.
 5. If the user chooses `fix`, determine whether the fix belongs cleanly in the
    reviewed commit.
 
@@ -60,8 +74,8 @@ When a fix belongs cleanly in the reviewed commit:
 
        squash into <reviewed-commit-hash>
 
-4. Append the decision, commit hash, checks run, and reasoning to
-   `DECISIONS.md`.
+4. Append the decision, fix placement, checks run, and reasoning to
+   `DECISIONS.md`. Use `Fix placement: Reviewed commit`.
 
 When a fix does not apply cleanly to only the reviewed commit:
 
@@ -71,8 +85,8 @@ When a fix does not apply cleanly to only the reviewed commit:
 3. Make the smallest correct patch on top of the current branch.
 4. Run the narrowest practical check for the changed code.
 5. Commit the patch as a normal fix commit with an explanatory message.
-6. Append the decision, commit hash, checks run, and reasoning to
-   `DECISIONS.md`.
+6. Append the decision, fix placement, checks run, and reasoning to
+   `DECISIONS.md`. Use `Fix placement: Standalone`.
 
 Use this append-only decision-log format:
 
@@ -81,13 +95,17 @@ Use this append-only decision-log format:
 
 - Review file: `<path>`
 - Reviewed commit: `<7-char hash>`
+- Reviewed subject: `<commit subject>`
+- Change-Id: `<Gerrit Change-Id>` or `none`
+- Finding fingerprint: `<path>::<nearest-symbol>` or `none`
 - Decision: Fix / Skip / Inspect then fix / Inspect then skip
-- Fix commit: `<7-char hash>` or `none`
-- Squash target: `<7-char hash>` or `none`
+- Fix placement: Reviewed commit / Standalone / None
 - Checks: `<commands run>` or `not run: <reason>`
 - Reasoning: <why this decision and implementation are correct>
 ```
 
+When the launcher supplies a review series, make `Review file` relative to
+the series root so its `rounds/<number>/` component is preserved.
 `Reasoning` is only the final rationale. Do not repeat source review text or
 add extra pseudo-fields there; use only the fields listed above.
 

@@ -132,6 +132,7 @@ finish_comment() {
   fi
   COMMENT_STORED=1
 
+  [[ -z "$FINDING_RECONCILIATION" ]] || return 0
   if [[ -z "$FINDING_COMMENT" ]]; then
     warn "$CURRENT_FILE: skipping finding without suggested review comment"
     return 0
@@ -161,6 +162,7 @@ start_finding() {
   FINDING_ACTION=
   FINDING_COMMENT=
   FINDING_LOCATION=
+  FINDING_RECONCILIATION=
   HAVE_FINDING=1
   COMMENT_STORED=0
   COLLECT_COMMENT=0
@@ -172,7 +174,7 @@ parse_review_file() {
   local in_findings=0
   local in_verdict=0
   local commit_re subject_re heading_re location_re
-  local confidence_re action_re engine_re
+  local confidence_re action_re reconciliation_re engine_re
   local location_text verdict_line
 
   reset_review
@@ -189,6 +191,7 @@ parse_review_file() {
   FINDING_ACTION=
   FINDING_COMMENT=
   FINDING_LOCATION=
+  FINDING_RECONCILIATION=
 
   commit_re="^(- )?Commit: \`([0-9A-Fa-f]{40})\`"
   subject_re='^- Subject: (.*)$'
@@ -196,6 +199,7 @@ parse_review_file() {
   location_re='^- Location: (.*)$'
   confidence_re='^- Confidence: (.*)$'
   action_re='^- (Gerrit action|Review action): (.*)$'
+  reconciliation_re='^- Reconciliation: (.*)$'
   engine_re='^_Engine: ([^[:space:]]+)'
 
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -218,7 +222,7 @@ parse_review_file() {
         in_verdict=0
         continue
         ;;
-      "## Questions"|"## Positive observations")
+      "## Reconciled findings"|"## Questions"|"## Positive observations")
         finish_comment
         in_findings=0
         in_verdict=0
@@ -229,6 +233,14 @@ parse_review_file() {
         finish_comment
         in_findings=0
         in_verdict=1
+        COLLECT_COMMENT=0
+        continue
+        ;;
+      "## Final-HEAD reconciliation")
+        finish_comment
+        in_findings=0
+        in_verdict=1
+        REVIEW_JUSTIFICATION=
         COLLECT_COMMENT=0
         continue
         ;;
@@ -271,6 +283,8 @@ parse_review_file() {
         fi
       elif [[ $line =~ $action_re ]]; then
         FINDING_ACTION=${BASH_REMATCH[2]}
+      elif [[ $line =~ $reconciliation_re ]]; then
+        FINDING_RECONCILIATION=${BASH_REMATCH[1]}
       elif [[ $line == "Suggested Gerrit comment:" ||
           $line == "Suggested review comment:" ]]; then
         COLLECT_COMMENT=1

@@ -3,6 +3,7 @@ mature, mixed-language codebase.
 
 Review commit: {{COMMIT}}
 Parent commit: {{PARENT}}
+Gerrit Change-Id: {{CHANGE_ID}}
 Subject: {{SUBJECT}}
 
 Review only the changes introduced by this commit. Obtain the exact change with:
@@ -59,6 +60,7 @@ Produce Markdown in exactly this structure:
 
 - Commit: `{{COMMIT}}`
 - Parent: `{{PARENT}}`
+- Change-Id: `{{CHANGE_ID}}`
 - Subject: {{SUBJECT}}
 
 ## Summary
@@ -73,6 +75,7 @@ For every likely real issue use:
 
 - Confidence: High / Medium
 - Location: `path/to/file:line`
+- Fingerprint: `path/to/file::nearest-symbol`
 - Introduced by this commit: Yes / Probably
 - Review action: Must fix / Should fix / Consider
 
@@ -90,8 +93,11 @@ No findings worth posting.
 
 ## Questions
 
-List uncertain assumptions or questions for the author. Do not present these as
-confirmed defects.
+List uncertain assumptions or questions for the author with exactly one `- `
+bullet per question. Indent continuation lines by two spaces. Do not present
+these as confirmed defects. If there are no questions, write exactly:
+
+None.
 
 ## Positive observations
 

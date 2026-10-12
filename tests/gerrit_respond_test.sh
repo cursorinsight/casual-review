@@ -62,8 +62,35 @@ Suggested Gerrit comment:
 
 > Explain the new mode in the README.
 
+### [Major] Fixed downstream inline
+
+- Confidence: High
+- Location: `bin/fixed-inline:9`
+- Fingerprint: `bin/fixed-inline::main`
+- Reconciliation: Fixed downstream by `abcdef1`
+- Review action: Must fix
+
+Suggested Gerrit comment:
+
+> This annotated comment must never be matched.
+
+## Reconciled findings
+
+### [Major] Already fixed
+
+- Confidence: High
+- Location: `bin/fixed:12`
+- Fingerprint: `bin/fixed::main`
+- Review action: Must fix
+
+Suggested Gerrit comment:
+
+> This reconciled comment must never be matched.
+
 ## Questions
 
+- Is the old fallback still required?
+  - Reconciliation: Fixed downstream by `abcdef1`
 - Follow-up question?
 EOF_REVIEW
 cat >"$empty_review_file" <<'EOF_EMPTY_REVIEW'
@@ -168,10 +195,60 @@ total=$(LIMIT=3 limited_decision_total "${#DECISION_TITLES[@]}")
 total=$(LIMIT=8 limited_decision_total "${#DECISION_TITLES[@]}")
 [[ "$total" == 5 ]] ||
   die "respond test: over-limit interactive total failed"
+SELECTED_ROUND=002
+decision_belongs_to_selected_round 'rounds/002/codex/review.md' ||
+  die "respond test: selected round decision rejected"
+if decision_belongs_to_selected_round 'rounds/001/codex/review.md'; then
+  die "respond test: earlier round decision accepted"
+fi
+if decision_belongs_to_selected_round 'codex/legacy-review.md'; then
+  die "respond test: legacy decision accepted after round one"
+fi
+ancestor_series="$tmp/rounds/002/project/ai-reviews"
+mkdir -p "$ancestor_series"
+SERIES_ROOT=$ancestor_series
+if decision_belongs_to_selected_round \
+    "$ancestor_series/codex/legacy-review.md"; then
+  die "respond test: ancestor round accepted as selected round"
+fi
+decision_belongs_to_selected_round \
+  "$ancestor_series/rounds/002/codex/review.md" ||
+  die "respond test: absolute selected round decision rejected"
+SELECTED_ROUND=001
+decision_belongs_to_selected_round 'codex/legacy-review.md' ||
+  die "respond test: legacy round-one decision rejected"
+# shellcheck disable=SC2034 # Read by sourced decision filtering.
+SELECTED_ROUND=
+# shellcheck disable=SC2034 # Read by sourced decision filtering.
+SERIES_ROOT=
+
+migrated_series=$tmp/migrated
+migrated_name=001-0123456789ab.md
+mkdir -p \
+  "$migrated_series/rounds/001/codex" \
+  "$migrated_series/rounds/001/claude"
+cp -- "$review_file" \
+  "$migrated_series/rounds/001/codex/$migrated_name"
+cp -- "$review_file" \
+  "$migrated_series/rounds/001/claude/$migrated_name"
+for engine in codex claude; do
+  resolved=$(
+    cd "$tmp"
+    SERIES_ROOT=migrated \
+      REVIEW_DIR=migrated/rounds/001 \
+      resolve_review_file "$migrated_series/$engine/$migrated_name"
+  ) || die "respond test: migrated $engine review did not resolve"
+  [[ "$resolved" == "migrated/rounds/001/$engine/$migrated_name" ]] ||
+    die "respond test: migrated $engine review resolved incorrectly"
+done
+
 parse_review_file "$review_file" ||
   die "respond test: review parse failed"
 [[ ${#COMMENT_PATHS[@]} -eq 2 ]] ||
   die "respond test: interleaved review comment count failed"
+[[ ${#QUESTION_TEXTS[@]} -eq 1 &&
+    "${QUESTION_TEXTS[0]}" == 'Follow-up question?' ]] ||
+  die "respond test: reconciled question was retained"
 comment_index=$(
   matching_review_comment_index "${DECISION_TITLES[0]}" "$review_file"
 ) ||
@@ -232,6 +309,14 @@ find_remote_comment \
   die "respond test: remote comment id failed"
 
 response=$(build_response_message 0)
+# shellcheck disable=SC2034 # Read by sourced build_response_message.
+DECISION_FIX_PLACEMENTS[0]='Reviewed commit'
+placement_response=$(build_response_message 0)
+[[ "$placement_response" == *'**Fix placement:** Reviewed commit'* ]] ||
+  die "respond test: fix placement missing"
+[[ "$placement_response" != *'**Fix commit:**'* ]] ||
+  die "respond test: legacy fix commit shown with placement"
+unset 'DECISION_FIX_PLACEMENTS[0]'
 comments_json=$(jq -c -n '{}')
 comments_json=$(
   add_comment_to_comments_json \

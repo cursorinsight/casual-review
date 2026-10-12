@@ -1,7 +1,12 @@
 Read the generated Markdown commit reviews under the directory given below.
-Do not independently review source code again. Consolidate only findings already
-present in those reports. Do not turn questions into confirmed defects and do not
-invent findings.
+Do not independently review source code again. Consolidate only findings
+already present in those reports. Do not turn questions into confirmed defects
+and do not invent findings.
+
+Treat findings and questions with a `Reconciliation` field as non-actionable
+history. Do not include them in tables or counts. Use the verdict under
+`Final-HEAD reconciliation`, when present. A commit with only reconciled items
+belongs under `Commits with no actionable findings`.
 
 Review directory: {{REVIEW_DIR}}
 
@@ -13,7 +18,7 @@ Produce Markdown with exactly these sections:
 
 A table containing only Critical and Major findings:
 
-| Engine | Commit | Severity | Confidence | File | Finding | Recommended action |
+| Engine | Commit | Severity | Confidence | File | Finding | Action |
 |---|---|---|---|---|---|---|
 
 ## Minor findings

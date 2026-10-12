@@ -14,6 +14,7 @@ Options:
                    use all to process every engine
                    (default: CASUAL_REVIEW_ENGINE or all engines)
   --limit N        process only the first N review files after filtering
+  --round N        process a specific round from a review series
   -h, --help       show help
 
 Required environment for --interactive and --yolo:
@@ -80,6 +81,7 @@ ENGINE_FILTER=${CASUAL_REVIEW_ENGINE:-}
 LIMIT=0
 REVIEW_DIR=
 REVIEW_DIR_ARG_SET=0
+ROUND=
 WARNINGS=0
 TOTAL_REVIEWS=0
 POSTED_REVIEWS=0
@@ -109,6 +111,11 @@ while (($#)); do
       LIMIT=$2
       shift 2
       ;;
+    --round)
+      cli_require_value "$1" "${2-}" "$#"
+      ROUND=$2
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -127,6 +134,7 @@ while (($#)); do
 done
 
 cli_validate_limit "$LIMIT"
+[[ -z "$ROUND" ]] || cli_validate_round "$ROUND"
 fi
 
 [[ "$ENGINE_FILTER" == all ]] && ENGINE_FILTER=
@@ -350,6 +358,7 @@ main() {
     REVIEW_DIR=ai-reviews
   fi
   [[ -d "$REVIEW_DIR" ]] || die "not a directory: $REVIEW_DIR"
+  REVIEW_DIR=$(resolve_review_round "$REVIEW_DIR" "$ROUND")
 
   validate_common_env
   if [[ "$MODE" != dry-run ]]; then
