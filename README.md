@@ -168,6 +168,10 @@ commit identity guard.
 
 New flat output and new rounds are staged and published after their index is
 complete, so a failed run can be retried without manual repair.
+If final-HEAD reconciliation fails after commit-local reviews complete, the
+run is still published normally with its original findings, questions, and
+verdicts. Its `README.md` warns that the results are unreconciled, while the
+exact prompt and raw response are retained under `reconciliation-failure/`.
 The initial flat-to-series migration is not interruption-safe. Terminating it
 can leave a partial `rounds/.001.tmp` or `rounds/001` state that requires
 manual repair before retrying.
