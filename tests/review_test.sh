@@ -5,6 +5,9 @@ ROOT_DIR="$(
   CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P
 )"
 
+# Temporary repositories and engine mocks must share the host filesystem.
+unset CASUAL_REVIEW_USE_CAPSULE CAPSULE_PROFILES
+
 tmp=
 
 cleanup() {
@@ -440,6 +443,7 @@ reconcile_bad=$tmp/reconcile-bad
 reconcile_bad_question=$tmp/reconcile-bad-question
 reconcile_prompts=$tmp/reconcile-prompts
 reconcile_counter=$tmp/reconcile-counter
+reconcile_warning_log=$tmp/reconcile-warning.log
 fake_codex=$tmp/codex
 mkdir -p "$reconcile_repo" "$reconcile_prompts"
 (
@@ -599,7 +603,7 @@ fi
 EOF_CODEX
 chmod +x "$fake_codex"
 
-if (
+if ! (
   cd "$reconcile_repo"
   CODEX_BIN="$fake_codex" \
   MOCK_COUNTER="$reconcile_counter" \
@@ -611,13 +615,23 @@ if (
       --head HEAD \
       --output "$reconcile_flat" \
       --skip-summary
-) >/dev/null 2>&1; then
-  die "review accepted an unreferenced prior skip"
+) >/dev/null 2>"$reconcile_warning_log"; then
+  die "review discarded an invalid prior-skip reconciliation"
 fi
-if find "$reconcile_flat" -mindepth 1 -print -quit | grep -q .; then
-  die "failed flat reconciliation left partial output"
-fi
-if (
+grep -Fq 'publishing unreconciled commit-local reviews' \
+  "$reconcile_warning_log" ||
+  die "failed reconciliation omitted its console warning"
+[[ -r "$reconcile_flat/README.md" ]] ||
+  die "failed flat reconciliation lost commit reviews"
+grep -Fq '## Reconciliation warning' "$reconcile_flat/README.md" ||
+  die "failed flat reconciliation omitted its warning"
+[[ -r "$reconcile_flat/reconciliation-failure/prompt.txt" ]] ||
+  die "failed flat reconciliation omitted its prompt"
+[[ -r "$reconcile_flat/reconciliation-failure/response.txt" ]] ||
+  die "failed flat reconciliation omitted its raw response"
+[[ ! -e "$reconcile_flat/RECONCILIATION.json" ]] ||
+  die "failed reconciliation published a validated manifest"
+if ! (
   cd "$reconcile_repo"
   CODEX_BIN="$fake_codex" \
   MOCK_COUNTER="$reconcile_counter" \
@@ -630,12 +644,11 @@ if (
       --output "$reconcile_bad" \
       --skip-summary
 ) >/dev/null 2>&1; then
-  die "review accepted an inconsistent reconciliation verdict"
+  die "review discarded an inconsistent reconciliation verdict"
 fi
-if find "$reconcile_bad" -mindepth 1 -print -quit | grep -q .; then
-  die "bad reconciliation verdict left partial output"
-fi
-if (
+[[ -r "$reconcile_bad/README.md" ]] ||
+  die "bad reconciliation verdict lost commit reviews"
+if ! (
   cd "$reconcile_repo"
   CODEX_BIN="$fake_codex" \
   MOCK_COUNTER="$reconcile_counter" \
@@ -648,12 +661,10 @@ if (
       --output "$reconcile_bad_question" \
       --skip-summary
 ) >/dev/null 2>&1; then
-  die "review accepted a malformed question section"
+  die "review discarded a malformed question section"
 fi
-if find "$reconcile_bad_question" -mindepth 1 -print -quit |
-    grep -q .; then
-  die "malformed question section left partial output"
-fi
+[[ -r "$reconcile_bad_question/README.md" ]] ||
+  die "malformed question section lost commit reviews"
 rm -f -- "$reconcile_counter"
 rm -rf -- "$reconcile_prompts"
 mkdir "$reconcile_prompts"
@@ -669,8 +680,12 @@ mkdir "$reconcile_prompts"
       --output "$reconcile_flat" \
       --skip-summary
 ) >/dev/null
-[[ -r "$reconcile_flat/README.md" ]] ||
+[[ -r "$reconcile_flat/rounds/002/README.md" ]] ||
   die "review could not retry a failed flat reconciliation"
+[[ -r "$reconcile_flat/rounds/001/reconciliation-failure/error.txt" ]] ||
+  die "review did not migrate failed reconciliation diagnostics"
+[[ ! -e "$reconcile_flat/reconciliation-failure" ]] ||
+  die "review left failed reconciliation diagnostics at series root"
 
 rm -f -- "$reconcile_counter"
 rm -rf -- "$reconcile_prompts"
@@ -746,7 +761,7 @@ grep -Fq -- '- Reconciliation: Prior skip remains valid' \
 rm -f -- "$reconcile_counter"
 rm -rf -- "$reconcile_prompts"
 mkdir "$reconcile_prompts"
-if (
+if ! (
   cd "$reconcile_repo"
   CODEX_BIN="$fake_codex" \
   MOCK_COUNTER="$reconcile_counter" \
@@ -760,10 +775,13 @@ if (
       --output "$reconcile_out" \
       --skip-summary
 ) >/dev/null 2>&1; then
-  die "review accepted a standalone fix as a commit-local fix"
+  die "review discarded a standalone-fix reconciliation failure"
 fi
-[[ ! -d "$reconcile_out/rounds/003" ]] ||
-  die "rejected standalone fix published a review round"
+[[ -r "$reconcile_out/rounds/003/README.md" ]] ||
+  die "rejected standalone fix lost commit reviews"
+grep -Fq '## Reconciliation warning' \
+  "$reconcile_out/rounds/003/README.md" ||
+  die "rejected standalone fix omitted its warning"
 sed 's/^- Fix placement: Standalone$/- Fix placement: Reviewed commit/' \
   "$reconcile_out/DECISIONS.md" >"$tmp/decisions-updated"
 mv -- "$tmp/decisions-updated" "$reconcile_out/DECISIONS.md"
@@ -784,7 +802,7 @@ mkdir "$reconcile_prompts"
       --output "$reconcile_out" \
       --skip-summary
 ) >/dev/null
-fix_review=$(find "$reconcile_out/rounds/003/codex" \
+fix_review=$(find "$reconcile_out/rounds/004/codex" \
   -type f -name '001-*.md' | sed -n '1p')
 grep -Fq -- '- Reconciliation: Prior fix remains valid' \
   "$fix_review" || die "review rejected a referenced prior fix"

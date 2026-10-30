@@ -512,7 +512,8 @@ migrate_flat_review() {
     die "cannot migrate: round 001 already exists"
   mkdir "$tmp"
   for item in README.md SUMMARY.md RECONCILIATION.json failures.tsv \
-      codex claude antigravity gerrit-browser-upload; do
+      codex claude antigravity gerrit-browser-upload \
+      reconciliation-failure; do
     [[ -e "$root/$item" ]] || continue
     if ! mv -- "$root/$item" "$tmp/$item"; then
       for rollback_item in "${moved[@]}"; do
@@ -601,6 +602,38 @@ publish_flat_run() {
   OUTPUT_DIR=$FLAT_OUTPUT_DIR
   INDEX=$OUTPUT_DIR/README.md
   FAILURES=$OUTPUT_DIR/failures.tsv
+}
+
+record_reconciliation_failure() {
+  local reason=$1
+  local failure_dir=$OUTPUT_DIR/reconciliation-failure
+
+  if ! mkdir -p "$failure_dir"; then
+    printf 'Warning: failed to preserve reconciliation diagnostics\n' >&2
+    return 0
+  fi
+  if [[ -n "$RECONCILIATION_TMP" && -e "$RECONCILIATION_TMP" ]]; then
+    if mv -- "$RECONCILIATION_TMP" \
+        "$failure_dir/response.txt"; then
+      RECONCILIATION_TMP=
+    fi
+  fi
+  if [[ -n "$PROMPT_TMP" && -e "$PROMPT_TMP" ]]; then
+    if mv -- "$PROMPT_TMP" "$failure_dir/prompt.txt"; then
+      PROMPT_TMP=
+    fi
+  fi
+  {
+    printf '%s\n' "$reason"
+    printf 'Commit-local reviews were retained without reconciliation.\n'
+  } >"$failure_dir/error.txt" ||
+    printf 'Warning: failed to write reconciliation error\n' >&2
+  {
+    printf '\n## Reconciliation warning\n\n'
+    printf 'Final-HEAD reconciliation failed. Commit-local findings, '
+    printf 'questions, and verdicts in this run are unreconciled.\n'
+  } >>"$INDEX" ||
+    printf 'Warning: failed to annotate unreconciled review index\n' >&2
 }
 
 extract_prior_decisions() {
@@ -1501,12 +1534,6 @@ for commit in "${COMMITS[@]}"; do
   done
 done
 
-if [[ ! -s "$FAILURES" ]]; then
-  if ((${#COMMITS[@]} > 1)) || [[ -n "$PRIOR_DECISIONS" ]]; then
-    reconcile_reviews || die "final-HEAD reconciliation failed"
-  fi
-fi
-
 # Written after the loop so the engine-config lines below reflect the real
 # resolved model/effort (populated by run_codex/run_claude on their first
 # successful call), not just the pre-run "default" placeholder.
@@ -1538,6 +1565,18 @@ EOF2
   cat "$ROWS"
 } >"$INDEX"
 rm -f "$ROWS"
+
+if [[ ! -s "$FAILURES" ]]; then
+  if ((${#COMMITS[@]} > 1)) || [[ -n "$PRIOR_DECISIONS" ]]; then
+    if ! reconcile_reviews; then
+      record_reconciliation_failure \
+        "Final-HEAD reconciliation failed."
+      printf '%s%s\n' \
+        'Warning: final-HEAD reconciliation failed; publishing' \
+        ' unreconciled commit-local reviews' >&2
+    fi
+  fi
+fi
 
 make_summary() {
   local engine

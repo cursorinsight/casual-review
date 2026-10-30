@@ -90,27 +90,44 @@ running_inside_capsule() {
 run_agent_leaf() {
   local leaf=$1
   local capsule_bin=${CAPSULE_BIN:-capsule}
-  local compose_file
+  local profile_file=$CASUAL_REVIEW_ROOT/capsule.toml
+  local ignored_api_keys=
+  local name=
+  local capsule_args=(--profile "$CASUAL_REVIEW_ROOT")
 
   shift
   if [[ -z "${CASUAL_REVIEW_USE_CAPSULE:-}" ]] ||
-      running_inside_capsule || [[ "${1-}" == -h ]] ||
-      [[ "${1-}" == --help ]]; then
+      [[ "${1-}" == -h ]] || [[ "${1-}" == --help ]]; then
+    run_leaf "$leaf" "$@"
+  fi
+  if running_inside_capsule; then
     run_leaf "$leaf" "$@"
   fi
 
-  compose_file=$CASUAL_REVIEW_ROOT/compose.yml
-  [[ -r "$compose_file" ]] || {
-    printf 'Error: Capsule compose file is not readable: %s\n' \
-      "$compose_file" >&2
+  [[ -r "$profile_file" ]] || {
+    printf 'Error: Capsule profile is not readable: %s\n' \
+      "$profile_file" >&2
     exit 1
   }
   command -v "$capsule_bin" >/dev/null 2>&1 || {
     printf 'Error: Capsule executable not found: %s\n' "$capsule_bin" >&2
     exit 1
   }
-  export CAPSULE_CUSTOM_COMPOSE=$compose_file
-  exec "$capsule_bin" casual-review "$leaf" "$@"
+  unset CAPSULE_CUSTOM_COMPOSE
+  for name in \
+    OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_API_KEY GEMINI_API_KEY; do
+    if printenv "$name" >/dev/null 2>&1; then
+      ignored_api_keys+="${ignored_api_keys:+, }$name"
+    fi
+  done
+  if [[ -n "$ignored_api_keys" ]]; then
+    printf 'Warning: host API keys are not forwarded into Capsule: %s\n' \
+      "$ignored_api_keys" >&2
+    printf 'Set them inside Capsule before using --use-credits.\n' >&2
+  fi
+  unset OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_API_KEY GEMINI_API_KEY
+  exec "$capsule_bin" "${capsule_args[@]}" \
+    casual-review "$leaf" "$@"
 }
 
 case "${1-}" in
