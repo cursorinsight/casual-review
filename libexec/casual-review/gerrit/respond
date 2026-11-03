@@ -391,6 +391,9 @@ parse_decisions_file() {
       "")
         CURRENT_FIELD=
         ;;
+      *)
+        CURRENT_FIELD=
+        ;;
     esac
   done <"$file"
   finish_current_decision
