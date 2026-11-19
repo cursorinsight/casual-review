@@ -132,25 +132,26 @@ assert.equal(
   api.messageMatches('**[AI/codex] Major:** Validate input', '', 'input', ''),
   true
 );
-const directReply = {};
-assert.equal(
-  api.findElementById({
-    getElementById: id => id === 'replyBtn' ? directReply : null,
-    querySelectorAll: () => [],
-  }, 'replyBtn'),
-  directReply
-);
-const shadowReply = {};
-const shadowRoot = {
-  getElementById: id => id === 'replyBtn' ? shadowReply : null,
+const threadReply = {};
+const threadRoot = {
+  host: {localName: 'gr-message'},
+  getElementById: id => id === 'replyBtn' ? threadReply : null,
+  querySelectorAll: () => [],
+};
+const changeReply = {};
+const changeRoot = {
+  host: {localName: 'gr-change-view'},
+  getElementById: id => id === 'replyBtn' ? changeReply : null,
   querySelectorAll: () => [],
 };
 assert.equal(
-  api.findElementById({
-    getElementById: () => null,
-    querySelectorAll: () => [{shadowRoot}],
-  }, 'replyBtn'),
-  shadowReply
+  api.findChangeReplyButton({
+    querySelectorAll: () => [
+      {shadowRoot: threadRoot},
+      {shadowRoot: changeRoot},
+    ],
+  }),
+  changeReply
 );
 assert.equal(api.badgeText('Major'), 'major');
 assert.equal(api.badgeText('Minor'), 'minor');

@@ -115,6 +115,11 @@ cat >"$decisions" <<EOF_DECISIONS
 
 - Review file: \`$review_file\`
 - Reviewed commit: \`0123456\`
+- Reviewed subject:
+  \`Wrapped subject must not become part of the commit hash\`
+- Change-Id: \`I0123456789abcdef0123456789abcdef01234567\`
+- Finding fingerprint:
+  \`bin/tool::validate_input\`
 - Decision: Fix
 - Fix commit: \`abcdef1\`
 - Squash target: \`0123456\`
@@ -186,6 +191,8 @@ fi
 parse_decisions_file "$decisions"
 [[ ${#DECISION_TITLES[@]} -eq 5 ]] ||
   die "respond test: decision count failed"
+[[ "${DECISION_REVIEWED_COMMITS[0]}" == 0123456 ]] ||
+  die "respond test: unknown metadata corrupted reviewed commit"
 total=$(LIMIT=0 limited_decision_total "${#DECISION_TITLES[@]}")
 [[ "$total" == 5 ]] ||
   die "respond test: unlimited interactive total failed"

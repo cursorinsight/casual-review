@@ -735,16 +735,20 @@
     return Boolean(state && activeState === state);
   }
 
-  function findElementById(node, id) {
+  function findChangeReplyButton(node) {
     if (!node) return null;
 
-    const direct = node.getElementById && node.getElementById(id);
-    if (direct) return direct;
+    if (
+      node.host &&
+      String(node.host.localName || '').toLowerCase() === 'gr-change-view'
+    ) {
+      return node.getElementById && node.getElementById('replyBtn');
+    }
 
     const elements = node.querySelectorAll ? node.querySelectorAll('*') : [];
     for (const element of elements) {
       if (!element.shadowRoot) continue;
-      const found = findElementById(element.shadowRoot, id);
+      const found = findChangeReplyButton(element.shadowRoot);
       if (found) return found;
     }
 
@@ -790,7 +794,7 @@
   function placeButton(state) {
     if (!isActiveState(state)) return false;
 
-    const replyButton = findElementById(document, 'replyBtn');
+    const replyButton = findChangeReplyButton(document);
     if (!replyButton || !replyButton.parentNode) return false;
 
     if (
@@ -898,7 +902,7 @@
     configure,
     fetchCurrentRevision,
     flattenBundleItems,
-    findElementById,
+    findChangeReplyButton,
     finishSuccessfulSubmission,
     getBasePathFromUrl,
     getChangeNumberFromUrl,
